@@ -35,5 +35,5 @@ runs:
           --payload '${{ inputs.payload }}' \
           --log-type "${{ inputs.log-type }}" \
           --region "${{ inputs.region }}" \
+          --cli-binary-format raw-in-base64-out \
           response.json
-        cat response.json
