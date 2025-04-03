@@ -1,0 +1,5 @@
+.vscode
+.python-version
+**/__pycache__
+.ai_code_editor_tasks.json
+.aider*

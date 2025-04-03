@@ -1,0 +1,39 @@
+name: "Invoke AWS Lambda"
+description: "Invoke an AWS Lambda using GitHub OIDC"
+inputs:
+  function-name:
+    description: "Name or ARN of the Lambda function"
+    required: true
+  region:
+    description: "AWS region (default: eu-central-1)"
+    required: false
+    default: "eu-central-1"
+  payload:
+    description: "JSON payload as string or @file.json"
+    required: false
+    default: "{}"
+  log-type:
+    description: "Log type to request from Lambda (e.g., Tail)"
+    required: false
+    default: "None"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials via OIDC
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ env.AWS_ASSUME_ROLE }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Invoke Lambda function
+      shell: bash
+      run: |
+        echo "Invoking Lambda: ${{ inputs.function-name }}"
+        aws lambda invoke \
+          --function-name "${{ inputs.function-name }}" \
+          --payload '${{ inputs.payload }}' \
+          --log-type "${{ inputs.log-type }}" \
+          --region "${{ inputs.region }}" \
+          response.json
+        cat response.json
