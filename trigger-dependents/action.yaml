@@ -1,0 +1,33 @@
+name: "Trigger Downstream Builds"
+description: "Calls Lambda to evaluate and trigger downstream builds via repository_dispatch"
+
+inputs:
+  role-to-assume:
+    required: true
+  region:
+    required: true
+  function-name:
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare trigger payload
+      shell: bash
+      run: |
+        PAYLOAD_JSON=$(jq -n \
+          --arg repo "poemAI-ch/${{ github.event.repository.name }}" \
+          --arg sha "${{ github.sha }}" \
+          '{task_type: "trigger_dependents", repo: $repo, sha: $sha}')
+
+        echo "PAYLOAD_JSON<<EOF" >> $GITHUB_ENV
+        echo "$PAYLOAD_JSON" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+    - name: Trigger downstreams via Lambda
+      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v2
+      with:
+        function-name: ${{ inputs.function-name }}
+        region: ${{ inputs.region }}
+        role-to-assume: ${{ inputs.role-to-assume }}
+        payload: ${{ env.PAYLOAD_JSON }}

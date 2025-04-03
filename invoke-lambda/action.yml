@@ -1,6 +1,10 @@
 name: "Invoke AWS Lambda"
-description: "Invoke an AWS Lambda using GitHub OIDC"
+description: "Invoke an AWS Lambda using GitHub OIDC with explicit inputs. Make sure you have id_token permission in your workflow."
+
 inputs:
+  role-to-assume:
+    description: "Full ARN of the IAM role to assume (required)"
+    required: true
   function-name:
     description: "Name or ARN of the Lambda function"
     required: true
@@ -23,7 +27,7 @@ runs:
     - name: Configure AWS credentials via OIDC
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ env.AWS_ASSUME_ROLE }}
+        role-to-assume: ${{ inputs.role-to-assume }}
         aws-region: ${{ inputs.region }}
 
     - name: Invoke Lambda function
