@@ -8,6 +8,12 @@ inputs:
     required: true
   function-name:
     required: true
+  manifest-url:
+    required: false
+    description: "Optional manifest URL for hash-based builds"
+  build-number:
+    required: false
+    description: "Optional build number for hash-based builds"
 
 runs:
   using: "composite"
@@ -18,7 +24,15 @@ runs:
         PAYLOAD_JSON=$(jq -n \
           --arg repo "poemAI-ch/${{ github.event.repository.name }}" \
           --arg sha "${{ github.sha }}" \
-          '{task_type: "trigger_dependents", repo: $repo, sha: $sha}')
+          --arg manifest_url "${{ inputs.manifest-url }}" \
+          --arg build_number "${{ inputs.build-number }}" \
+          '{
+            task_type: "trigger_dependents", 
+            repo: $repo, 
+            sha: $sha
+          } + 
+          (if $manifest_url != "" then {manifest_url: $manifest_url} else {} end) +
+          (if $build_number != "" then {build_number: $build_number} else {} end)')
 
         echo "PAYLOAD_JSON<<EOF" >> $GITHUB_ENV
         echo "$PAYLOAD_JSON" >> $GITHUB_ENV
