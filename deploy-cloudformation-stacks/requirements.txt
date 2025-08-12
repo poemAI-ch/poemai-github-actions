@@ -1,0 +1,4 @@
+boto3>=1.37.0
+networkx>=3.0
+pyyaml>=6.0
+pytest>=8.0
