@@ -148,32 +148,51 @@ def test_resolve_version_with_hash_support():
     result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas", repo_versions, "SomeVersion")
     assert result == "abcdef1"
     
-    # Test individual lambda version with hash-based key
+    # Test individual lambda version with new full format (repo#lambda_name)
     repo_versions = {
-        "BotAdminLambdaVersion": "1234567890abcdef",
-        "AssistantAPILambdaVersion": "fedcba0987654321"
+        "poemAI-ch/poemai-lambdas#bot_admin": "1234567890abcdef",
+        "poemAI-ch/poemai-lambdas#assistant_api": "fedcba0987654321"
     }
-    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#BotAdminLambdaVersion", repo_versions, "BotAdminLambdaVersion")
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#bot_admin", repo_versions, "BotAdminLambdaVersion")
     assert result == "1234567890abcdef"
     
-    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#AssistantAPILambdaVersion", repo_versions, "AssistantAPILambdaVersion")
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#assistant_api", repo_versions, "AssistantAPILambdaVersion")
+    assert result == "fedcba0987654321"
+    
+    # Test backward compatibility with old format (lambda names without repo prefix)
+    repo_versions = {
+        "bot_admin": "1234567890abcdef",
+        "assistant_api": "fedcba0987654321"
+    }
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#bot_admin", repo_versions, "BotAdminLambdaVersion")
+    assert result == "1234567890abcdef"
+    
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#assistant_api", repo_versions, "AssistantAPILambdaVersion")
     assert result == "fedcba0987654321"
     
     # Test mixed scenario (both repo-wide and individual versions)
     repo_versions = {
         "poemAI-ch/poemai-lambdas": "abcdef1234567890",
-        "BotAdminLambdaVersion": "1234567890abcdef"
+        "poemAI-ch/poemai-lambdas#bot_admin": "1234567890abcdef"
     }
-    # Should prefer repo-wide version when both exist
+    # Should use repo-wide version when no hash syntax
     result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas", repo_versions, "SomeVersion")
     assert result == "abcdef1"
     
-    # Should use individual version when specified with hash syntax
-    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#BotAdminLambdaVersion", repo_versions, "BotAdminLambdaVersion")
+    # Should use individual version when specified with hash syntax (new format takes precedence)
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#bot_admin", repo_versions, "BotAdminLambdaVersion")
     assert result == "1234567890abcdef"
     
+    # Test precedence: new format should take precedence over old format
+    repo_versions = {
+        "poemAI-ch/poemai-lambdas#bot_admin": "new_format_hash",
+        "bot_admin": "old_format_hash"
+    }
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#bot_admin", repo_versions, "BotAdminLambdaVersion")
+    assert result == "new_format_hash"
+    
     # Test missing version
-    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#NonExistentVersion", repo_versions, "NonExistentVersion")
+    result = resolve_version_with_hash_support("poemAI-ch/poemai-lambdas#nonexistent_lambda", repo_versions, "NonExistentVersion")
     assert result is None
     
     result = resolve_version_with_hash_support("poemAI-ch/nonexistent-repo", repo_versions, "SomeVersion")

@@ -411,7 +411,7 @@ def resolve_version_with_hash_support(repo, repo_versions, key_name):
     Enhanced version resolution that supports hash-based individual lambda versions.
     
     Args:
-        repo: The repository name (e.g., "poemAI-ch/poemai-lambdas")
+        repo: The repository name (e.g., "poemAI-ch/poemai-lambdas" or "poemAI-ch/poemai-lambdas#lambda_name")
         repo_versions: Dictionary containing version mappings
         key_name: The key being resolved (e.g., "BotAdminLambdaVersion")
         
@@ -419,18 +419,24 @@ def resolve_version_with_hash_support(repo, repo_versions, key_name):
         str: Either the short SHA (first 7 chars) for repo-wide versions,
              or the full hash for individual lambda versions
     """
+    # Check for hash-based individual lambda version first
+    # Format: "poemAI-ch/poemai-lambdas#lambda_name" -> look for full key in repo_versions
+    if "#" in repo:
+        # New format: Look for the full key with repo#lambda_name
+        if repo in repo_versions:
+            return repo_versions[repo]
+        
+        # Backward compatibility: Try the old format where lambda names were stored without repo prefix
+        base_repo, lambda_name = repo.rsplit("#", 1)
+        if lambda_name in repo_versions:
+            return repo_versions[lambda_name]
+        
+        return None
+    
+    # Traditional repo-wide version
     if repo in repo_versions:
-        # Traditional repo-wide version
         full_sha = repo_versions[repo]
         return full_sha[:7]
-    
-    # Check for hash-based individual lambda version
-    # Format: "poemAI-ch/poemai-lambdas#VersionKey" -> look for "VersionKey" in repo_versions
-    if "#" in repo:
-        base_repo, version_key = repo.rsplit("#", 1)
-        if version_key in repo_versions:
-            # For individual lambda versions, return the full hash
-            return repo_versions[version_key]
     
     return None
 
