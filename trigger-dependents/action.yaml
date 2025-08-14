@@ -14,6 +14,9 @@ inputs:
   build-number:
     required: false
     description: "Optional build number for hash-based builds"
+  environment:
+    required: false
+    description: "Environment context (staging, production) for environment-aware triggering"
 
 runs:
   using: "composite"
@@ -26,13 +29,15 @@ runs:
           --arg sha "${{ github.sha }}" \
           --arg manifest_url "${{ inputs.manifest-url }}" \
           --arg build_number "${{ inputs.build-number }}" \
+          --arg environment "${{ inputs.environment }}" \
           '{
             task_type: "trigger_dependents", 
             repo: $repo, 
             sha: $sha
           } + 
           (if $manifest_url != "" then {manifest_url: $manifest_url} else {} end) +
-          (if $build_number != "" then {build_number: $build_number} else {} end)')
+          (if $build_number != "" then {build_number: $build_number} else {} end) +
+          (if $environment != "" then {environment: $environment} else {} end)')
 
         echo "PAYLOAD_JSON<<EOF" >> $GITHUB_ENV
         echo "$PAYLOAD_JSON" >> $GITHUB_ENV
