@@ -21,6 +21,14 @@ inputs:
     required: false
     default: "None"
 
+outputs:
+  response:
+    description: "The response from the Lambda function"
+    value: ${{ steps.invoke.outputs.response }}
+  success:
+    description: "Whether the Lambda invocation was successful"
+    value: ${{ steps.invoke.outputs.success }}
+
 runs:
   using: "composite"
   steps:
@@ -31,13 +39,70 @@ runs:
         aws-region: ${{ inputs.region }}
 
     - name: Invoke Lambda function
+      id: invoke
       shell: bash
       run: |
         echo "Invoking Lambda: ${{ inputs.function-name }}"
-        aws lambda invoke \
+        echo "Region: ${{ inputs.region }}"
+        echo "Payload: ${{ inputs.payload }}"
+        
+        # Invoke the Lambda function and capture the exit code
+        if aws lambda invoke \
           --function-name "${{ inputs.function-name }}" \
           --payload '${{ inputs.payload }}' \
           --log-type "${{ inputs.log-type }}" \
           --region "${{ inputs.region }}" \
           --cli-binary-format raw-in-base64-out \
-          response.json
+          response.json; then
+          
+          echo "✅ Lambda invocation successful"
+          
+          # Check if response file exists and show its contents
+          if [ -f response.json ]; then
+            echo "📄 Lambda response:"
+            cat response.json
+            echo ""
+            
+            # Set output variables
+            RESPONSE_CONTENT=$(cat response.json)
+            echo "response<<EOF" >> $GITHUB_OUTPUT
+            echo "$RESPONSE_CONTENT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            
+            # Check for Lambda function errors in the response
+            if jq -e '.errorMessage' response.json > /dev/null 2>&1; then
+              echo "❌ Lambda function returned an error:"
+              jq -r '.errorMessage' response.json
+              echo "Error Type: $(jq -r '.errorType // "Unknown"' response.json)"
+              if jq -e '.stackTrace' response.json > /dev/null 2>&1; then
+                echo "Stack Trace:"
+                jq -r '.stackTrace[]' response.json
+              fi
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            else
+              echo "✅ Lambda function executed successfully"
+              echo "success=true" >> $GITHUB_OUTPUT
+              # Show the actual response payload if it's JSON
+              if jq empty response.json 2>/dev/null; then
+                echo "📋 Response payload:"
+                jq '.' response.json
+              fi
+            fi
+          else
+            echo "⚠️  Warning: No response file generated"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "response=" >> $GITHUB_OUTPUT
+          fi
+          
+        else
+          echo "❌ AWS CLI invoke command failed with exit code $?"
+          echo "This could indicate:"
+          echo "  - Invalid function name or ARN"
+          echo "  - Insufficient permissions"
+          echo "  - Network connectivity issues"
+          echo "  - Invalid payload format"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "response=" >> $GITHUB_OUTPUT
+          exit 1
+        fi

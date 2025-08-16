@@ -21,21 +21,48 @@ runs:
     - name: Prepare dependencies JSON payload
       shell: bash
       run: |
+        echo "📁 Reading .poemai-dependencies.yaml..."
+        if [ ! -f .poemai-dependencies.yaml ]; then
+          echo "❌ Error: .poemai-dependencies.yaml file not found"
+          exit 1
+        fi
+        
         DEP_YAML=$(cat .poemai-dependencies.yaml)
+        echo "📄 Dependencies YAML content:"
+        echo "$DEP_YAML"
+        echo ""
+        
         PAYLOAD_JSON=$(jq -n \
           --arg repo "poemAI-ch/${{ github.event.repository.name }}" \
           --arg sha "${{ github.sha }}" \
           --arg deps_yaml "$DEP_YAML" \
           '{task_type: "store_dependencies", repo: $repo, sha: $sha, dependencies_yaml: $deps_yaml}')
 
+        echo "📦 Generated JSON payload:"
+        echo "$PAYLOAD_JSON" | jq '.'
+        echo ""
+
         echo "PAYLOAD_JSON<<EOF" >> $GITHUB_ENV
         echo "$PAYLOAD_JSON" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
     - name: Register in S3 via Lambda
+      id: register
       uses: poemAI-ch/poemai-github-actions/invoke-lambda@v2
       with:
         function-name: ${{ inputs.function-name }}
         region: ${{ inputs.region }}
         role-to-assume: ${{ inputs.role-to-assume }}
         payload: ${{ env.PAYLOAD_JSON }}
+
+    - name: Check registration result
+      shell: bash
+      run: |
+        if [ "${{ steps.register.outputs.success }}" == "true" ]; then
+          echo "✅ Dependencies registered successfully"
+          echo "📋 Lambda response: ${{ steps.register.outputs.response }}"
+        else
+          echo "❌ Failed to register dependencies"
+          echo "📋 Lambda response: ${{ steps.register.outputs.response }}"
+          exit 1
+        fi
