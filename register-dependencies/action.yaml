@@ -48,7 +48,7 @@ runs:
 
     - name: Register in S3 via Lambda
       id: register
-      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v2
+      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v3.3.0
       with:
         function-name: ${{ inputs.function-name }}
         region: ${{ inputs.region }}
