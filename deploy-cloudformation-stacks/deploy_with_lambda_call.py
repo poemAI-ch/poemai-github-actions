@@ -291,22 +291,22 @@ def create_message(
 
     parameter_names_in_template = set(template_content.get("Parameters", {}).keys())
 
-    print(
+    _logger.debug(
         f"Parameters required from template {template_file}: {parameter_names_in_template}"
     )
 
     if not raw_stack_name:
-        print(f"Skipping stack without a name: {stack}")
+        _logger.debug(f"Skipping stack without a name: {stack}")
         return
 
     stack_name = f"{raw_stack_name}-{environment}" if environment else raw_stack_name
 
-    if "disabled" in stack and any_to_bool(stack["disabled"]):
-        print(f"Skipping {stack_name} as it is disabled")
+    if "disabled" in stack and stack["disabled"]:
+        _logger.debug(f"Skipping {stack_name} as it is disabled")
         return
 
     parameters = stack.get("parameters", {})
-    _logger.info(f"Parameters defined in stack {stack_name}: {parameters}")
+    _logger.debug(f"Parameters defined in stack {stack_name}: {parameters}")
     parameters_to_use = {}
     for key, value in parameters.items():
         if isinstance(value, dict):
@@ -315,7 +315,7 @@ def create_message(
                 if ref in globals:
                     referred_value = globals[ref]
                     parameters_to_use[key] = str(referred_value)
-                    _logger.info(
+                    _logger.debug(
                         f"Resolved $ref {ref} to {referred_value} to fill in {key}"
                     )
                     referenced_globals.add(ref)
@@ -360,7 +360,7 @@ def create_message(
         parameters_to_use.keys()
     ):
         if missing_parameter in globals:
-            _logger.info(
+            _logger.debug(
                 f"Missing parameter {missing_parameter:<20} found in globals, using global value"
             )
             parameters_to_use[missing_parameter] = globals[missing_parameter]
@@ -370,7 +370,7 @@ def create_message(
     missing_parameters = parameter_names_in_template - defined_parameters
     if missing_parameters:
         for missing_parameter in missing_parameters:
-            _logger.info(
+            _logger.debug(
                 f"Missing parameter {missing_parameter:<20} for {stack_name} loaded from {template_file}"
             )
         raise ValueError(
@@ -380,7 +380,7 @@ def create_message(
     unknown_parameters = defined_parameters - parameter_names_in_template
     if unknown_parameters:
         for unknown_parameter in unknown_parameters:
-            _logger.info(
+            _logger.debug(
                 f"Unknown parameter  {unknown_parameter:<20} for {stack_name} loaded from {template_file}"
             )
 
@@ -475,7 +475,7 @@ def prepare_messages(config, config_file):
                 resolved_version = resolve_version_with_hash_support(repo, repo_versions, key)
                 if resolved_version is not None:
                     globals[key] = resolved_version
-                    _logger.info(
+                    _logger.debug(
                         f"Calculated global {key} from {repo} yielding {globals[key]}"
                     )
                 else:
@@ -499,7 +499,7 @@ def prepare_messages(config, config_file):
                     )
 
                 globals[key] = template.safe_substitute(globals)
-                _logger.info(
+                _logger.debug(
                     f"Calculated global {key} from the pattern {pattern} yielding {globals[key]}"
                 )
     for key, value in globals.items():
@@ -508,7 +508,7 @@ def prepare_messages(config, config_file):
                 global_key = value["$ref"]
                 if global_key in globals:
                     globals[key] = globals[global_key]
-                    _logger.info(
+                    _logger.debug(
                         f"Calculated global {key} from the reference {global_key} yielding {globals[key]}"
                     )
                 else:
@@ -574,7 +574,7 @@ def prepare_messages(config, config_file):
 
     # Generate topological generations
     generations = list(nx.topological_generations(dependency_graph))
-    _logger.info("Topological generations computed for parallel deployment.")
+    _logger.debug("Topological generations computed for parallel deployment.")
 
     # Sort messages according to topological generations
     sorted_messages_by_generation = []
@@ -596,9 +596,9 @@ def prepare_messages(config, config_file):
         for message_spec in messages:
             message_spec["total_messages"] = message_counter
 
-    _logger.info("Messages sorted into topological generations:")
+    _logger.debug("Messages sorted into topological generations:")
     for i, messages in enumerate(sorted_messages_by_generation):
-        _logger.info(
+        _logger.debug(
             f"Generation {i}: {', '.join([m['message']['stack_name'] for m in messages])}"
         )
 
@@ -858,40 +858,143 @@ def do_dump_graph(config, config_file):
                 _logger.info(f"  - {d}")
 
 
-def do_dump(config, config_file, config_global_environment):
+def validate_stack_name_filter(config, config_global_environment, stack_name_filter):
+    """
+    Validate that the provided stack name filter matches at least one stack.
+    Returns True if valid, raises SystemExit with helpful error message if not.
+    """
+    if stack_name_filter is None:
+        return True
+    
+    # Get all stack names (both full and stripped)
+    all_stacks = config.get("stacks", [])
+    full_stack_names = []
+    stripped_stack_names = []
+    
+    for stack in all_stacks:
+        if stack.get("disabled", False):
+            continue
+            
+        full_name = calc_stack_name(stack["stack_name"], config_global_environment)
+        stripped_name = strip_environment_suffix(full_name)
+        
+        full_stack_names.append(full_name)
+        stripped_stack_names.append(stripped_name)
+    
+    # Check if the filter matches any stack (full or stripped name)
+    matches_any = False
+    for full_name in full_stack_names:
+        if compare_stack_names(full_name, stack_name_filter):
+            matches_any = True
+            break
+    
+    if not matches_any:
+        _logger.error(f"❌ Stack name '{stack_name_filter}' does not match any available stacks.")
+        _logger.error(f"Available stack names (without environment suffix):")
+        for stripped_name in sorted(set(stripped_stack_names)):
+            _logger.error(f"  - {stripped_name}")
+        _logger.error(f"Available full stack names:")
+        for full_name in sorted(set(full_stack_names)):
+            _logger.error(f"  - {full_name}")
+        _logger.error(f"Note: You can use either the full name (with environment suffix) or just the base name.")
+        raise SystemExit(1)
+    
+    return True
+
+
+def do_dump(config, config_file, config_global_environment, verbose=False, stack_name=None):
+
+    # Validate stack name filter if provided (do this before any processing that modifies config)
+    validate_stack_name_filter(config, config_global_environment, stack_name)
 
     message_generations, dependency_graph = prepare_messages(config, config_file)
 
+    total_stacks = 0
+    successful_stacks = 0
+    
     for i, messages in enumerate(message_generations):
-        _logger.info(f"*** Generation {i}:")
+        if verbose:
+            _logger.info(f"*** Generation {i}:")
         for message_spec in messages:
             message = message_spec["message"]
             stack = message_spec["stack"]
-            stack_name = calc_stack_name(
-                message["stack_name"], config_global_environment
-            )
+            current_stack_name = message["stack_name"]  # Already calculated in prepare_messages
 
+            # Filter by specific stack name if provided
             if stack_name is not None and not compare_stack_names(
-                stack_name, stack_name
+                current_stack_name, stack_name
             ):
                 continue
 
+            _logger.debug(f"Processing {current_stack_name} (matches {stack_name})")
+            total_stacks += 1
             template_file_name = stack.get("template_file")
             if not template_file_name:
                 template_file_name = calc_template_file_name(stack["stack_name"])
-            _logger.info(
-                f"Message for {stack_name} using template {template_file_name}:"
-            )
-            _logger.info("Parameters:")
-            for key, value in message["parameters"].items():
-                _logger.info(f"  {key}: {value}")
-            _logger.info("Template:\n")
-            _logger.info(message["template"])
-            _logger.info(f"END {stack_name}")
+            
+            if verbose:
+                _logger.info(
+                    f"Message for {current_stack_name} using template {template_file_name}:"
+                )
+                _logger.info("Parameters:")
+                for key, value in message["parameters"].items():
+                    _logger.info(f"  {key}: {value}")
+                _logger.info("Template:\n")
+                _logger.info(message["template"])
+                _logger.info(f"END {current_stack_name}")
+            else:
+                # Just show a summary line
+                param_count = len(message["parameters"])
+                _logger.info(f"✓ {current_stack_name} using {template_file_name} ({param_count} parameters)")
+            
+            successful_stacks += 1
 
+    if not verbose:
+        _logger.info(f"\n📋 Summary: Successfully processed {successful_stacks}/{total_stacks} templates")
+        if successful_stacks == total_stacks:
+            _logger.info("✅ All templates validated successfully!")
+        else:
+            _logger.error(f"❌ {total_stacks - successful_stacks} templates failed validation")
+
+
+def setup_logging(verbose=False):
+    """Setup logging with INFO to stdout, WARNING/ERROR to stderr"""
+    # Remove any existing handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    
+    # Set overall level based on verbose flag
+    level = logging.DEBUG if verbose else logging.INFO
+    root_logger.setLevel(level)
+    
+    # Create formatter
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    
+    # INFO handler -> stdout (only shows INFO, not DEBUG)
+    info_handler = logging.StreamHandler(sys.stdout)
+    info_handler.setLevel(logging.INFO)
+    info_handler.setFormatter(formatter)
+    info_handler.addFilter(lambda record: logging.INFO <= record.levelno < logging.WARNING)
+    
+    # WARNING/ERROR handler -> stderr  
+    error_handler = logging.StreamHandler(sys.stderr)
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(formatter)
+    
+    root_logger.addHandler(info_handler)
+    root_logger.addHandler(error_handler)
+    
+    # If verbose, also add DEBUG handler to stdout
+    if verbose:
+        debug_handler = logging.StreamHandler(sys.stdout)
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.setFormatter(formatter)
+        debug_handler.addFilter(lambda record: record.levelno == logging.DEBUG)
+        root_logger.addHandler(debug_handler)
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    # Initial basic setup for argument parsing
+    logging.basicConfig(level=logging.WARNING)
 
     parser = argparse.ArgumentParser(description="PoemAI Cluster")
 
@@ -941,9 +1044,20 @@ def main():
             action="store",
             help="Use a file used to override globals",
         )
+        
+        if command == "dump":
+            subparser.add_argument(
+                "--verbose", "-v",
+                action="store_true",
+                help="Show full template content (default: summary only)",
+            )
 
     # parse arguments
     args, unknown = parser.parse_known_args()
+    
+    # Setup proper logging based on verbose flag
+    verbose = getattr(args, 'verbose', False)
+    setup_logging(verbose)
 
     config = None
     if args.config_file:
@@ -992,7 +1106,9 @@ def main():
         )
 
     elif args.command == "dump":
-        do_dump(config, args.config_file, config_global_environment)
+        verbose = getattr(args, 'verbose', False)
+        stack_name = getattr(args, 'stack_name', None)
+        do_dump(config, args.config_file, config_global_environment, verbose, stack_name)
     elif args.command == "dump_graph":
         do_dump_graph(config, args.config_file)
 

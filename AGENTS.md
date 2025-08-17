@@ -57,7 +57,74 @@ When modifying actions:
 ### deploy-cloudformation-stacks  
 - **Purpose**: Deploys CloudFormation stacks with lambda support
 - **Latest Version**: v3.1.0 (as of last update)
-- **Key Features**: Lambda-based deployment, stack dependencies
+- **Key Features**: Lambda-based deployment, stack dependencies, enhanced stack filtering
+
+#### Recent Enhancements (August 2025)
+
+**Enhanced Stack Filtering and Validation System**
+
+The `deploy_with_lambda_call.py` script now includes comprehensive stack filtering improvements:
+
+**Key Features Added:**
+
+1. **Stack Name Validation**: Pre-validates stack names before processing
+   - Comprehensive error messages listing all available stacks
+   - Shows both base names and full names with environment suffixes
+   - Helpful usage hints for developers
+
+2. **Flexible Stack Name Support**: Both formats now work seamlessly
+   - Base names: `poemai-github-role`
+   - Full names: `poemai-github-role-development`
+
+3. **Improved Error Handling**: 
+   ```bash
+   # Example error output with helpful suggestions
+   ❌ Stack name 'non-existent-stack' does not match any available stacks.
+   Available stack names (without environment suffix):
+     - poemai-monitoring-sns-topic
+     - poemai-lambda-crawler
+   Available full stack names:
+     - poemai-monitoring-sns-topic-staging
+     - poemai-lambda-crawler-staging
+   Note: You can use either the full name or just the base name.
+   ```
+
+4. **pytest Test Framework**: Comprehensive test suite for stack filtering
+   - `test_stack_filtering_single_stack`: Tests specific stack filtering
+   - `test_stack_filtering_all_stacks`: Tests processing all stacks
+   - `test_stack_filtering_nonexistent_stack`: Tests error handling
+   - `test_stack_filtering_both_name_formats`: Tests both name formats
+   - `test_compare_stack_names`: Tests core name comparison logic
+
+**Bug Fixes:**
+- Fixed double environment suffix issue (e.g., `stack-two-development-development`)
+- Improved config object handling to prevent mutations between test calls
+- Enhanced debug logging for troubleshooting filtering issues
+
+**Development Workflow Improvements:**
+- Created `validate_cf_stacks.sh` convenience script with command-line options
+- Modified `precommit.sh` to use local version during development
+- Efficient focused testing instead of repeated CLI runs
+- Support for environment-specific validation (`-e staging`)
+- Support for single-stack validation (`-s stack-name`)
+- Verbose mode for detailed debugging (`-v`)
+
+**Usage Examples:**
+```bash
+# Test specific stack with verbose output
+./validate_cf_stacks.sh -e staging -s poemai-monitoring-sns-topic -v
+
+# Test all stacks in staging
+./validate_cf_stacks.sh -e staging  
+
+# Run comprehensive pytest tests
+python -m pytest tests/test_deploy_with_lambda.py::test_stack_filtering_* -v
+```
+
+**Files Modified:**
+- `deploy_with_lambda_call.py`: Added `validate_stack_name_filter()` function
+- `tests/test_deploy_with_lambda.py`: Added 5 new test functions
+- Enhanced error messages and stack name matching logic
 
 ### invoke-lambda
 - **Purpose**: Invokes AWS Lambda functions from GitHub Actions
