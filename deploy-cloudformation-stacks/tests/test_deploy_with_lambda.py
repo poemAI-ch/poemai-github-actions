@@ -533,3 +533,233 @@ def test_stack_filtering_both_name_formats(tmpdir, caplog):
     summary_logs = [record.message for record in caplog.records if "Summary: Successfully processed" in record.message]
     assert len(summary_logs) == 1
     assert "1/1 templates" in summary_logs[0]
+
+
+def test_override_globals_file_functionality(tmpdir, caplog):
+    """Test the --override-globals-file functionality."""
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create a simple stacks configuration with a global variable
+    stacks = {
+        "environment": environment,
+        "globals": {
+            "TestVersion": "default-version-123",
+            "Environment": environment,
+        },
+        "stacks": [
+            {
+                "stack_name": "test-stack",
+                "template_file": "test_stack.yaml",
+                "parameters": {
+                    "Environment": {"$ref": "Environment"},
+                    "Version": {"$ref": "TestVersion"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create a globals override file
+    override_globals_file = tempdir / "override_globals.txt"
+    with open(override_globals_file, "w") as f:
+        f.write("TestVersion=overridden-version-456\n")
+        f.write("AnotherVar=additional-value\n")
+
+    # Create template file
+    stack_template = {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Parameters": {
+            "Environment": {"Type": "String"},
+            "Version": {"Type": "String"}
+        },
+        "Resources": {
+            "TestResource": {
+                "Type": "AWS::S3::Bucket",
+                "Properties": {
+                    "BucketName": {"Fn::Sub": "test-bucket-${Version}"}
+                }
+            }
+        }
+    }
+    
+    stack_template_file = envdir / "test_stack.yaml"
+    with open(stack_template_file, "w") as f:
+        yaml.dump(stack_template, f)
+
+    config = yaml.safe_load(open(stacks_file))
+    
+    # Test with override globals file
+    from deploy_with_lambda_call import prepare_messages
+    
+    # Mock the override globals file loading by patching the load function
+    with patch("deploy_with_lambda_call.load_globals_from_file") as mock_load:
+        mock_load.return_value = {
+            "TestVersion": "overridden-version-456",
+            "AnotherVar": "additional-value"
+        }
+        
+        with caplog.at_level(logging.DEBUG):
+            # This should use the overridden values
+            message_generations, dependency_graph = prepare_messages(config, stacks_file.as_posix())
+        
+        # Verify that load_globals_from_file was called
+        mock_load.assert_called()
+        
+        # Check that the overridden version is used in the generated message
+        messages = [msg for generation in message_generations for msg in generation]
+        assert len(messages) == 1
+        
+        # The Version parameter should have the overridden value
+        assert messages[0]["message"]["parameters"]["Version"] == "overridden-version-456"
+
+
+def test_load_globals_from_file_functionality(tmpdir):
+    """Test the load_globals_from_file function directly."""
+    from deploy_with_lambda_call import load_globals_from_file
+    
+    tempdir = Path(tmpdir)
+    
+    # Create a globals file with different formats
+    globals_file = tempdir / "test_globals.txt"
+    with open(globals_file, "w") as f:
+        f.write("# This is a comment\n")
+        f.write("simple_var=simple_value\n")
+        f.write("version_var=abc123def456\n")
+        f.write("  spaced_var  =  spaced_value  \n")  # Test whitespace handling
+        f.write("\n")  # Empty line
+        f.write("equals_in_value=key=value=pair\n")  # Multiple equals signs
+    
+    # Test loading the file
+    result = load_globals_from_file(globals_file.as_posix())
+    
+    expected = {
+        "simple_var": "simple_value",
+        "version_var": "abc123def456", 
+        "spaced_var": "spaced_value",
+        "equals_in_value": "key=value=pair"
+    }
+    
+    assert result == expected
+    
+    # Test with non-existent file
+    result = load_globals_from_file("non_existent_file.txt")
+    assert result == {}
+
+
+def test_override_globals_file_functionality(tmpdir, caplog):
+    """Test that --override-globals-file parameter works correctly."""
+    from deploy_with_lambda_call import prepare_messages, load_config
+    
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create a basic stacks configuration with version variables
+    stacks = {
+        "environment": environment,
+        "globals": {
+            "TestLambdaVersion": {"$version": "poemAI-ch/test-repo#test_lambda"},
+            "AnotherVersion": "default-version"
+        },
+        "stacks": [
+            {
+                "stack_name": "test-stack",
+                "template_file": "test_stack.yaml",
+                "parameters": {
+                    "Environment": {"$ref": "Environment"},
+                    "LambdaS3Key": {"$sub": "lambdas/test_lambda/${TestLambdaVersion}/test_lambda.zip"},
+                    "AnotherParam": {"$ref": "AnotherVersion"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create a template file
+    stack_template = {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Parameters": {
+            "Environment": {"Type": "String"},
+            "LambdaS3Key": {"Type": "String"},
+            "AnotherParam": {"Type": "String"}
+        },
+        "Resources": {
+            "TestResource": {
+                "Type": "AWS::S3::Bucket",
+                "Properties": {
+                    "BucketName": "test-bucket"
+                }
+            }
+        }
+    }
+    
+    stack_template_file = envdir / "test_stack.yaml"
+    with open(stack_template_file, "w") as f:
+        yaml.dump(stack_template, f)
+
+    # Create a versions file (like .poemai-upstream-versions.yaml)
+    versions_file = tempdir / "versions.yaml"
+    versions_data = {
+        "versions": {
+            "poemAI-ch/test-repo#test_lambda": "abcdef123456"
+        }
+    }
+    with open(versions_file, "w") as f:
+        yaml.dump(versions_data, f)
+
+    # Create an override globals file (like devops_lambda_versions.txt)
+    override_globals_file = tempdir / "override_globals.txt"
+    with open(override_globals_file, "w") as f:
+        f.write("TestLambdaVersion=override123456\n")
+        f.write("AnotherVersion=overridden-value\n")
+
+    # Test 1: Load config without override file (should use version from versions.yaml)
+    config = load_config(str(stacks_file))
+    config["repo_versions_file"] = "../versions.yaml"  # Relative to the stacks.yaml file
+    
+    message_generations, dependency_graph = prepare_messages(config, str(stacks_file))
+    messages = [msg for generation in message_generations for msg in generation]
+    
+    # Should use version from versions.yaml
+    test_message = next(msg for msg in messages if msg["message"]["stack_name"] == "test-stack-development")
+    assert "lambdas/test_lambda/abcdef123456/test_lambda.zip" in test_message["message"]["parameters"]["LambdaS3Key"]
+    assert test_message["message"]["parameters"]["AnotherParam"] == "default-version"
+
+    # Test 2: Test with override globals file using the correct parameter name
+    import argparse
+    import sys
+    from unittest.mock import patch
+    from io import StringIO
+    
+    # Mock sys.argv to include the override globals file parameter
+    test_args = ["deploy_with_lambda_call.py", "dump", str(stacks_file), "--override-globals-file", str(override_globals_file)]
+    
+    # Capture stdout to check for override messages
+    captured_output = StringIO()
+    
+    with patch.object(sys, 'argv', test_args), patch.object(sys, 'stdout', captured_output):
+        from deploy_with_lambda_call import main
+        
+        # Capture the output to verify override worked
+        with caplog.at_level(logging.INFO):
+            try:
+                main()
+            except SystemExit:
+                pass  # main() calls sys.exit(), which is normal
+    
+    # Check captured output for override messages
+    output = captured_output.getvalue()
+    
+    # The override should result in TestLambdaVersion being "override123456"
+    assert "Using override global TestLambdaVersion: override123456" in output
+    assert "Using override global AnotherVersion: overridden-value" in output

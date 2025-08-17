@@ -37,6 +37,29 @@ for tag in ["!Select"]:
     )
 
 
+def load_globals_from_file(file_path):
+    """Load global variables from a file.
+    
+    Args:
+        file_path (str): Path to the file containing key=value pairs
+        
+    Returns:
+        dict: Dictionary of loaded key-value pairs
+    """
+    if not os.path.exists(file_path):
+        return {}
+    
+    globals_dict = {}
+    with open(file_path, "r") as file:
+        for line in file:
+            if line.startswith("#") or not line.strip():
+                continue
+            key, value = line.strip().split("=", 1)
+            globals_dict[key.strip()] = value.strip()
+    
+    return globals_dict
+
+
 def strip_environment_suffix(stack_name):
     for env in ENVIRONMENT_PRIORITY:
         if stack_name.endswith(f"-{env}"):
@@ -1039,7 +1062,7 @@ def main():
             )
 
         subparser.add_argument(
-            "--orverride-globals-file",
+            "--override-globals-file",
             type=str,
             action="store",
             help="Use a file used to override globals",
@@ -1074,19 +1097,16 @@ def main():
         if "globals" not in config or config["globals"] is None:
             config["globals"] = {}
 
-        if args.orverride_globals_file:
-            override_globals_file = args.orverride_globals_file
+        if args.override_globals_file:
+            override_globals_file = args.override_globals_file
             if not os.path.exists(override_globals_file):
                 raise ValueError(
                     f"Override globals file {override_globals_file} not found"
                 )
-            with open(override_globals_file, "r") as file:
-                for line in file:
-                    if line.startswith("#") or not line.strip():
-                        continue
-                    key, value = line.strip().split("=", 1)
-                    config["globals"][key] = value
-                    _logger.info(f"Using override global {key}: {value}")
+            override_globals = load_globals_from_file(override_globals_file)
+            for key, value in override_globals.items():
+                config["globals"][key] = value
+                _logger.info(f"Using override global {key}: {value}")
 
     if args.lint:
         do_lint(

@@ -25,6 +25,9 @@ inputs:
     description: "Command to run (deploy, dump, dump_graph)"
     required: false
     default: "deploy"
+  override-globals-file:
+    description: "Path to file containing global variable overrides"
+    required: false
 
 runs:
   using: "composite"
@@ -63,6 +66,11 @@ runs:
         # Add optional stack name
         if [ -n "${{ inputs.stack-name }}" ]; then
           CMD="$CMD --stack-name ${{ inputs.stack-name }}"
+        fi
+        
+        # Add optional override globals file
+        if [ -n "${{ inputs.override-globals-file }}" ]; then
+          CMD="$CMD --override-globals-file ${{ inputs.override-globals-file }}"
         fi
         
         echo "Executing: $CMD"
