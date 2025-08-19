@@ -972,3 +972,74 @@ def test_empty_template_file_handling(tmpdir):
     assert "empty" in error_message.lower() or "invalid" in error_message.lower()
     # Should mention the specific file that has the issue
     assert "empty_template.yaml" in error_message or "comments_only_template.yaml" in error_message or "whitespace_only_template.yaml" in error_message
+
+
+def test_dependency_on_disabled_stack_fails(tmpdir):
+    """Test that depending on a disabled stack causes a validation error."""
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create stacks configuration where stack-b depends on disabled stack-a
+    stacks = {
+        "environment": environment,
+        "globals": {},
+        "stacks": [
+            {
+                "stack_name": "stack-a",
+                "template_file": "stack_a.yaml",
+                "disabled": True,  # This stack is disabled
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "stack-b", 
+                "template_file": "stack_b.yaml",
+                "dependencies": ["stack-a"],  # Depends on disabled stack
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create template files (even though stack-a won't be processed due to being disabled)
+    for stack_name in ["stack_a", "stack_b"]:
+        stack_template = {
+            "AWSTemplateFormatVersion": "2010-09-09",
+            "Parameters": {
+                "Environment": {"Type": "String"}
+            },
+            "Resources": {
+                "TestResource": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {
+                        "BucketName": f"{stack_name}-bucket"
+                    }
+                }
+            }
+        }
+        
+        stack_template_file = envdir / f"{stack_name}.yaml"
+        with open(stack_template_file, "w") as f:
+            yaml.dump(stack_template, f)
+
+    config = yaml.safe_load(open(stacks_file))
+    
+    # Test that preparing messages with dependency on disabled stack fails
+    from deploy_with_lambda_call import prepare_messages
+    
+    # Should raise a clear error message about depending on disabled stack
+    with pytest.raises(ValueError) as exc_info:
+        prepare_messages(config, stacks_file.as_posix())
+    
+    error_message = str(exc_info.value)
+    # The error should mention the dependency on disabled stack
+    assert "disabled" in error_message.lower()
+    assert "stack-a" in error_message or "stack-a-development" in error_message

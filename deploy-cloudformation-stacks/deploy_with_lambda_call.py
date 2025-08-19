@@ -565,6 +565,15 @@ def prepare_messages(config, config_file):
         ]
     )
 
+    # Create a set of disabled stack names for validation
+    disabled_stack_names = set(
+        [
+            calc_stack_name(s["stack_name"], config_global_environment)
+            for s in config["stacks"]
+            if s.get("disabled", False)
+        ]
+    )
+
     for stack in config["stacks"]:
         stack_name = calc_stack_name(stack["stack_name"], config_global_environment)
         dependency_graph.add_node(stack_name)
@@ -600,6 +609,15 @@ def prepare_messages(config, config_file):
                     raise ValueError(
                         f"Dependency {dependency_full_name} not found in stacks"
                     )
+                
+                # Check if the dependency is disabled
+                if dependency_full_name in disabled_stack_names:
+                    raise ValueError(
+                        f"Stack {stack_name} depends on disabled stack {dependency_full_name}. "
+                        f"Cannot deploy a stack that depends on a disabled stack. "
+                        f"Either enable the dependency or remove the dependency."
+                    )
+                
                 dependency_graph.add_edge(stack_name, dependency_full_name)
 
     # Check for unused globals
