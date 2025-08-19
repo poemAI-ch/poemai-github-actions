@@ -312,6 +312,19 @@ def create_message(
         _logger.error(f"Error parsing template {template_file}: {e}", exc_info=True)
         sys.exit(1)
 
+    # Check if template content is valid
+    if template_content is None:
+        raise ValueError(
+            f"Template file {template_file} is empty or contains only comments. "
+            f"CloudFormation templates must contain at least a basic structure with Resources section."
+        )
+    
+    if not isinstance(template_content, dict):
+        raise ValueError(
+            f"Template file {template_file} does not contain a valid CloudFormation template structure. "
+            f"Expected a YAML dictionary but got {type(template_content)}."
+        )
+
     parameter_names_in_template = set(template_content.get("Parameters", {}).keys())
 
     _logger.debug(

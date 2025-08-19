@@ -898,3 +898,77 @@ def test_deploy_fails_with_missing_dependencies(tmpdir):
         
         # Should specifically mention the missing dependency
         assert "stack-a-development" in error_message
+
+
+def test_empty_template_file_handling(tmpdir):
+    """Test that empty or invalid template files are handled gracefully."""
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create stacks configuration
+    stacks = {
+        "environment": environment,
+        "globals": {},
+        "stacks": [
+            {
+                "stack_name": "empty-template-stack",
+                "template_file": "empty_template.yaml",
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "comments-only-stack", 
+                "template_file": "comments_only_template.yaml",
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "whitespace-only-stack",
+                "template_file": "whitespace_only_template.yaml", 
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create an empty template file
+    empty_template_file = envdir / "empty_template.yaml"
+    with open(empty_template_file, "w") as f:
+        f.write("")  # Completely empty
+
+    # Create a template file with only comments
+    comments_only_template_file = envdir / "comments_only_template.yaml"
+    with open(comments_only_template_file, "w") as f:
+        f.write("# This is just a comment\n")
+        f.write("# Another comment\n")
+
+    # Create a template file with only whitespace
+    whitespace_only_template_file = envdir / "whitespace_only_template.yaml"
+    with open(whitespace_only_template_file, "w") as f:
+        f.write("   \n")  # Just spaces and newlines
+        f.write("\t\n")   # Tab and newline
+        f.write("\n")     # Just newline
+
+    config = yaml.safe_load(open(stacks_file))
+    
+    # Test that preparing messages with empty template fails gracefully
+    from deploy_with_lambda_call import prepare_messages
+    
+    # Should raise a clear error message about the empty template
+    with pytest.raises(ValueError) as exc_info:
+        prepare_messages(config, stacks_file.as_posix())
+    
+    error_message = str(exc_info.value)
+    # The error should mention that the template file is empty or invalid
+    assert "empty" in error_message.lower() or "invalid" in error_message.lower()
+    # Should mention the specific file that has the issue
+    assert "empty_template.yaml" in error_message or "comments_only_template.yaml" in error_message or "whitespace_only_template.yaml" in error_message
