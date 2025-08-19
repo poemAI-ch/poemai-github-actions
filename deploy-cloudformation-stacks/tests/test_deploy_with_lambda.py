@@ -3,6 +3,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 from deploy_with_lambda_call import deploy, do_dump_graph, do_dump, resolve_version_with_hash_support
 
@@ -17,7 +18,7 @@ def test_deploy(tmpdir):
 
     envdir.mkdir(parents=True, exist_ok=True)
 
-    with patch("poemai_devops.tools.deploy_with_lambda_call.boto3") as boto3_mock:
+    with patch("deploy_with_lambda_call.boto3") as boto3_mock:
 
         stacks = {
             "environment": "devops",
@@ -62,7 +63,7 @@ def test_deploy_2(tmpdir):
     envdir.mkdir(parents=True, exist_ok=True)
 
     with patch(
-        "poemai_devops.tools.deploy_with_lambda_call.boto3", name="boto3_mock"
+        "deploy_with_lambda_call.boto3", name="boto3_mock"
     ) as boto3_mock:
         lambda_client_mock = MagicMock()
         boto3_mock.client.return_value = lambda_client_mock
@@ -763,3 +764,137 @@ def test_override_globals_file_functionality(tmpdir, caplog):
     # The override should result in TestLambdaVersion being "override123456"
     assert "Using override global TestLambdaVersion: override123456" in output
     assert "Using override global AnotherVersion: overridden-value" in output
+
+
+def test_deploy_fails_with_missing_dependencies(tmpdir):
+    """Test that deployment fails hard when dependencies are missing."""
+    import sys
+    import time
+    
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    with patch("deploy_with_lambda_call.boto3") as boto3_mock:
+        lambda_client_mock = MagicMock()
+        cf_client_mock = MagicMock()
+        
+        # Mock boto3 client creation
+        def client_side_effect(service_name, *args, **kwargs):
+            if service_name == "lambda":
+                return lambda_client_mock
+            elif service_name == "cloudformation":
+                return cf_client_mock
+            return MagicMock()
+        
+        boto3_mock.client.side_effect = client_side_effect
+
+        # Set up lambda client mock
+        lambda_client_mock.exceptions = MagicMock()
+        class TooManyRequestsException(Exception):
+            pass
+        lambda_client_mock.exceptions.TooManyRequestsException = TooManyRequestsException
+
+        # Mock successful lambda response for stack-a
+        payload_content = '[{"status": "success"}]'
+        payload_stream = BytesIO(payload_content.encode("utf-8"))
+        payload_mock = MagicMock()
+        payload_mock.read.return_value = payload_stream.read()
+        lambda_client_mock.invoke.return_value = {"Payload": payload_mock}
+
+        # Mock CloudFormation to report success for deployed stacks
+        cf_client_mock.describe_stacks.return_value = {
+            "Stacks": [{"StackStatus": "CREATE_COMPLETE"}]
+        }
+
+        # Create stacks configuration with dependencies
+        # stack-b depends on stack-a, stack-c depends on stack-b
+        stacks = {
+            "environment": environment,
+            "globals": {},
+            "stacks": [
+                {
+                    "stack_name": "stack-a",
+                    "template_file": "stack_a.yaml",
+                    "parameters": {
+                        "Environment": {"$ref": "Environment"}
+                    }
+                },
+                {
+                    "stack_name": "stack-b",
+                    "template_file": "stack_b.yaml", 
+                    "parameters": {
+                        "Environment": {"$ref": "Environment"}
+                    },
+                    "dependencies": ["stack-a"]
+                },
+                {
+                    "stack_name": "stack-c",
+                    "template_file": "stack_c.yaml",
+                    "parameters": {
+                        "Environment": {"$ref": "Environment"}
+                    }, 
+                    "dependencies": ["stack-b"]
+                }
+            ],
+        }
+        stacks_file = envdir / "stacks.yaml"
+        with open(stacks_file, "w") as f:
+            yaml.dump(stacks, f)
+
+        # Create template files for all stacks
+        for stack_name in ["stack_a", "stack_b", "stack_c"]:
+            stack_template = {
+                "AWSTemplateFormatVersion": "2010-09-09",
+                "Parameters": {
+                    "Environment": {"Type": "String"}
+                },
+                "Resources": {
+                    "TestResource": {
+                        "Type": "AWS::S3::Bucket",
+                        "Properties": {
+                            "BucketName": f"{stack_name}-bucket"
+                        }
+                    }
+                }
+            }
+            
+            stack_template_file = envdir / f"{stack_name}.yaml"
+            with open(stack_template_file, "w") as f:
+                yaml.dump(stack_template, f)
+
+        # Mock a scenario where stack-a fails to deploy by making lambda throw an exception for stack-a
+        def mock_invoke_side_effect(*args, **kwargs):
+            payload = kwargs.get('Payload', '')
+            if 'stack-a-development' in payload:
+                # Simulate failure for stack-a
+                raise Exception("Simulated deployment failure for stack-a")
+            else:
+                # For other stacks, return success
+                payload_content = '[{"status": "success"}]'
+                payload_stream = BytesIO(payload_content.encode("utf-8"))
+                payload_mock = MagicMock()
+                payload_mock.read.return_value = payload_stream.read()
+                return {"Payload": payload_mock}
+        
+        lambda_client_mock.invoke.side_effect = mock_invoke_side_effect
+
+        config = yaml.safe_load(open(stacks_file))
+        
+        # Test that deployment fails when stack-a fails and stack-b/c can't proceed
+        with pytest.raises(ValueError) as exc_info:
+            deploy(
+                "test-lambda-function",
+                config,
+                stacks_file.as_posix(),
+                stack_name=None
+            )
+        
+        # The error should mention failed dependencies
+        error_message = str(exc_info.value)
+        assert "Cannot deploy" in error_message and "dependencies have not been successfully deployed" in error_message
+        
+        # Should specifically mention the missing dependency
+        assert "stack-a-development" in error_message

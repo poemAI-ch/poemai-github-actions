@@ -780,10 +780,14 @@ def deploy(lambda_function_name, config, config_file, stack_name=None):
                 not all([d in successful_stacks for d in descendants])
                 and not stack_name
             ):
-                _logger.info(
-                    f"Skipping {stack_candidate['message']['stack_name']} as not all dependencies are deployed"
+                missing_dependencies = [d for d in descendants if d not in successful_stacks]
+                error_msg = (
+                    f"Cannot deploy {stack_candidate['message']['stack_name']} because the following "
+                    f"dependencies have not been successfully deployed: {missing_dependencies}. "
+                    f"This indicates a deployment failure in earlier generations."
                 )
-                continue
+                _logger.error(error_msg)
+                raise ValueError(error_msg)
             eligible_stacks.append(stack_candidate)
 
         stack_names_in_process = set(
