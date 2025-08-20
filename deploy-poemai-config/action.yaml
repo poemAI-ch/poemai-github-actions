@@ -6,6 +6,10 @@ inputs:
   environment:
     description: 'Environment to deploy to (production, staging, development)'
     required: true
+  target-environment:
+    description: 'Target environment to deploy to (for cross-deployment). Defaults to same as source environment.'
+    required: false
+    default: ''
   lambda-function-name:
     description: 'Name of the Lambda function to invoke for deployment'
     required: true
@@ -64,7 +68,12 @@ runs:
       shell: bash
       run: |
         echo "🚀 Deploying poemai configuration..."
-        echo "  Environment: ${{ inputs.environment }}"
+        echo "  Source environment: ${{ inputs.environment }}"
+        if [ -n "${{ inputs.target-environment }}" ]; then
+          echo "  Target environment: ${{ inputs.target-environment }} (cross-deployment)"
+        else
+          echo "  Target environment: ${{ inputs.environment }} (same as source)"
+        fi
         echo "  Lambda function: ${{ inputs.lambda-function-name }}"
         echo "  Project root: ${{ inputs.project-root-path }}"
         
@@ -84,8 +93,14 @@ runs:
           VERSION_ID="$COMMIT_SHORT"
         fi
         
+        TARGET_ENV_ARG=""
+        if [ -n "${{ inputs.target-environment }}" ]; then
+          TARGET_ENV_ARG="--target-environment ${{ inputs.target-environment }}"
+        fi
+        
         python ${{ github.action_path }}/deploy_config_with_lambda_call.py \
           --environment "${{ inputs.environment }}" \
+          $TARGET_ENV_ARG \
           --lambda-function-name "${{ inputs.lambda-function-name }}" \
           --project-root-path "${{ inputs.project-root-path }}" \
           --version-id "$VERSION_ID" \

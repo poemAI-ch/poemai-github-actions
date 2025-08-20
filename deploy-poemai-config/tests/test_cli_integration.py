@@ -25,6 +25,7 @@ class TestCLIIntegration:
 
         # Check for key arguments
         assert "--environment" in help_text
+        assert "--target-environment" in help_text
         assert "--lambda-function-name" in help_text
         assert "--temporary-corpus-key" in help_text
         assert "--temporary-corpus-key-ttl-hours" in help_text
@@ -472,6 +473,125 @@ class TestErrorScenarios:
             )
             assert '"corpus_key": "TEMP_SUCCESS"' in result.stderr
             assert result.returncode == 1  # Fails at Lambda stage, not at validation
+
+    def test_target_environment_cross_deployment(self):
+        """Test cross-deployment with target-environment parameter"""
+        script_path = Path(__file__).parent.parent / "deploy_config_with_lambda_call.py"
+
+        # Set mock AWS credentials
+        env = {
+            **dict(os.environ),
+            "AWS_ACCESS_KEY_ID": "test_key",
+            "AWS_SECRET_ACCESS_KEY": "test_secret",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        }
+
+        # Create production environment structure
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corpus_keys_dir = (
+                Path(tmpdir)
+                / "environments"
+                / "production"
+                / "corpus_keys"
+                / "PROD_BOT"
+            )
+            corpus_keys_dir.mkdir(parents=True)
+
+            # Create production config
+            test_config = {
+                "pk": "CORPUS_KEY#PROD_BOT",
+                "sk": "ASSISTANT_ID#prod_assistant",
+                "assistant_id": "prod_assistant",
+                "corpus_key": "PROD_BOT",
+                "name": "Production Assistant",
+            }
+
+            with open(corpus_keys_dir / "assistant.yaml", "w") as f:
+                yaml.dump(test_config, f)
+
+            # Test cross-deployment: production config to staging
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--environment",
+                    "production",
+                    "--target-environment",
+                    "staging",
+                    "--lambda-function-name",
+                    "staging-function",
+                    "--project-root-path",
+                    tmpdir,
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            # Should show cross-deployment logging
+            assert (
+                "Cross-deployment: Loading config from 'production' environment, deploying to 'staging' environment"
+                in result.stderr
+            )
+
+            # Should load production config
+            assert '"name": "Production Assistant"' in result.stderr
+            assert '"corpus_key": "PROD_BOT"' in result.stderr
+
+            # Will fail at Lambda stage (expected), but should process config correctly
+            assert result.returncode == 1
+
+    def test_target_environment_same_as_source(self):
+        """Test that empty target-environment defaults to source environment"""
+        script_path = Path(__file__).parent.parent / "deploy_config_with_lambda_call.py"
+
+        # Set mock AWS credentials
+        env = {
+            **dict(os.environ),
+            "AWS_ACCESS_KEY_ID": "test_key",
+            "AWS_SECRET_ACCESS_KEY": "test_secret",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corpus_keys_dir = (
+                Path(tmpdir) / "environments" / "staging" / "corpus_keys" / "TEST_BOT"
+            )
+            corpus_keys_dir.mkdir(parents=True)
+
+            test_config = {
+                "pk": "CORPUS_KEY#TEST_BOT",
+                "sk": "ASSISTANT_ID#test",
+                "assistant_id": "test",
+                "corpus_key": "TEST_BOT",
+            }
+
+            with open(corpus_keys_dir / "test.yaml", "w") as f:
+                yaml.dump(test_config, f)
+
+            # Test without target-environment (should default to source)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--environment",
+                    "staging",
+                    "--lambda-function-name",
+                    "test-function",
+                    "--project-root-path",
+                    tmpdir,
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            # Should show standard deployment logging
+            assert (
+                "Standard deployment: Using 'staging' environment for both source and target"
+                in result.stderr
+            )
+            assert result.returncode == 1  # Fails at Lambda stage, not at parsing
 
 
 if __name__ == "__main__":
