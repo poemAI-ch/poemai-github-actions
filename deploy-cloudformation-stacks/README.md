@@ -15,7 +15,7 @@ A reusable GitHub Action for deploying CloudFormation stacks with hash-based lam
 ### Lambda-based Deployment (Current Pattern)
 ```yaml
 - name: Deploy CloudFormation Stacks
-  uses: poemAI-ch/poemai-github-actions/deploy-cloudformation-stacks@v1
+  uses: poemAI-ch/poemai-github-actions/deploy-cloudformation-stacks@v5.0.2
   with:
     role-to-assume: arn:aws:iam::123456789012:role/deployment-role
     region: eu-central-1
@@ -27,7 +27,7 @@ A reusable GitHub Action for deploying CloudFormation stacks with hash-based lam
 ### Direct Deployment
 ```yaml
 - name: Deploy CloudFormation Stacks
-  uses: poemAI-ch/poemai-github-actions/deploy-cloudformation-stacks@v1
+  uses: poemAI-ch/poemai-github-actions/deploy-cloudformation-stacks@v5.0.2
   with:
     role-to-assume: arn:aws:iam::123456789012:role/deployment-role
     region: eu-central-1

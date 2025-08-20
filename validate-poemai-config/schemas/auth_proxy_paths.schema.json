@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "patternProperties": {
+    "^\\/.*": {
+      "anyOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "PUBLIC_PATH_PREFIXES": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": {
+    "anyOf": [
+      { "type": "string" },
+      {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    ]
+  }
+}
+

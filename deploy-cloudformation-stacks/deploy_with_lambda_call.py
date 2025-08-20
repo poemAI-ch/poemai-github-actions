@@ -610,8 +610,10 @@ def prepare_messages(config, config_file):
                         f"Dependency {dependency_full_name} not found in stacks"
                     )
                 
-                # Check if the dependency is disabled
-                if dependency_full_name in disabled_stack_names:
+                # Check if an ENABLED stack depends on a disabled stack
+                # (Disabled stacks can depend on disabled stacks - that's fine)
+                is_current_stack_disabled = stack.get("disabled", False)
+                if not is_current_stack_disabled and dependency_full_name in disabled_stack_names:
                     raise ValueError(
                         f"Stack {stack_name} depends on disabled stack {dependency_full_name}. "
                         f"Cannot deploy a stack that depends on a disabled stack. "

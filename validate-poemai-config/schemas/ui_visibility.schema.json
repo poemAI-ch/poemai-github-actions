@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "patternProperties": {
+    "^[a-z0-9-]+$": {
+      "type": "object",
+      "properties": {
+        "app_root": { "type": "string" },
+        "path_patterns": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-z_]+$": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "visible_app_paths_by_group": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "object",
+              "properties": {
+                "visible_path_patterns": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["visible_path_patterns"],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["app_root", "path_patterns", "visible_app_paths_by_group"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

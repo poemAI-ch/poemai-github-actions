@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "URL Monitor Configuration Schema",
+  "description": "Configuration for URL monitoring with CloudWatch metrics",
+  "required": ["urls"],
+  "properties": {
+    "custom_dimensions": {
+      "type": "object",
+      "title": "Custom CloudWatch Dimensions",
+      "description": "Custom dimensions to apply to all metrics",
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_]*$": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "Environment": "staging",
+          "ServiceType": "web-api",
+          "Team": "platform"
+        }
+      ]
+    },
+    "urls": {
+      "type": "array",
+      "title": "URLs to Monitor",
+      "description": "List of URLs to monitor for availability and performance",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "minLength": 1,
+            "maxLength": 2048,
+            "title": "Simple URL",
+            "description": "URL string for backward compatibility"
+          },
+          {
+            "type": "object",
+            "title": "URL Configuration Object",
+            "description": "URL with additional monitoring configuration",
+            "required": ["url"],
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "minLength": 1,
+                "maxLength": 2048,
+                "description": "The URL to monitor"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255,
+                "description": "Human-readable name for the endpoint"
+              },
+              "expected_status": {
+                "type": "array",
+                "description": "List of expected HTTP status codes or range [min, max]",
+                "items": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599
+                },
+                "minItems": 1,
+                "maxItems": 100,
+                "examples": [
+                  [200, 299],
+                  [401],
+                  [200, 302, 401]
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "examples": [
+        [
+          "https://example.com",
+          {
+            "url": "https://api.example.com/auth",
+            "name": "Auth API",
+            "expected_status": [401, 403]
+          },
+          {
+            "url": "https://api.example.com/health",
+            "name": "Health Check",
+            "expected_status": [200, 299]
+          }
+        ]
+      ]
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,61 @@
+name: 'Validate poemai Config'
+description: 'Validate poemai configuration files using shared validation tools'
+author: 'poemAI-ch'
+
+inputs:
+  environment:
+    description: 'Environment to validate (production, staging, development)'
+    required: true
+  project-root-path:
+    description: 'Path to the project root containing environments/ directory'
+    required: false
+    default: '.'
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.12'
+  additional-requirements:
+    description: 'Additional pip packages to install (space-separated)'
+    required: false
+    default: ''
+  corpus-keys:
+    description: 'Comma-separated list of allowed corpus keys (optional - if not provided, all corpus keys are allowed)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install base dependencies
+      shell: bash
+      run: |
+        pip install jsonschema pyyaml poemai-utils requests
+
+    - name: Install additional requirements
+      if: ${{ inputs.additional-requirements != '' }}
+      shell: bash
+      run: |
+        pip install ${{ inputs.additional-requirements }}
+
+    - name: Validate configuration files
+      shell: bash
+      run: |
+        echo "🔍 Validating poemai configuration files..."
+        echo "  Environment: ${{ inputs.environment }}"
+        echo "  Project root: ${{ inputs.project-root-path }}"
+        echo ""
+        
+        python ${{ github.action_path }}/config_validator.py \
+          --project-root-path="${{ inputs.project-root-path }}" \
+          --environment="${{ inputs.environment }}"
+        
+        echo "✅ Configuration validation completed successfully!"
+
+branding:
+  icon: 'check-circle'
+  color: 'green'

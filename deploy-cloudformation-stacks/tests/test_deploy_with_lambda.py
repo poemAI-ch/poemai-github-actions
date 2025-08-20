@@ -1043,3 +1043,168 @@ def test_dependency_on_disabled_stack_fails(tmpdir):
     # The error should mention the dependency on disabled stack
     assert "disabled" in error_message.lower()
     assert "stack-a" in error_message or "stack-a-development" in error_message
+
+
+def test_disabled_stack_chain_is_allowed(tmpdir):
+    """Test that a disabled stack can depend on another disabled stack without error."""
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create stacks configuration with disabled chain:
+    # stack-c (enabled) -> stack-b (disabled) -> stack-a (disabled)
+    # Only stack-c depending on disabled stack-b should be an error
+    stacks = {
+        "environment": environment,
+        "globals": {},
+        "stacks": [
+            {
+                "stack_name": "stack-a",
+                "template_file": "stack_a.yaml",
+                "disabled": True,  # Disabled
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "stack-b", 
+                "template_file": "stack_b.yaml",
+                "dependencies": ["stack-a"],  # Disabled depends on disabled - should be OK
+                "disabled": True,  # Also disabled
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "stack-c",
+                "template_file": "stack_c.yaml", 
+                "dependencies": ["stack-b"],  # Enabled depends on disabled - should be ERROR
+                "disabled": False,  # Enabled
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create template files
+    for stack_name in ["stack_a", "stack_b", "stack_c"]:
+        stack_template = {
+            "AWSTemplateFormatVersion": "2010-09-09",
+            "Parameters": {
+                "Environment": {"Type": "String"}
+            },
+            "Resources": {
+                "TestResource": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {
+                        "BucketName": f"{stack_name}-bucket"
+                    }
+                }
+            }
+        }
+        
+        stack_template_file = envdir / f"{stack_name}.yaml"
+        with open(stack_template_file, "w") as f:
+            yaml.dump(stack_template, f)
+
+    config = yaml.safe_load(open(stacks_file))
+    
+    # Test that preparing messages fails only because enabled stack-c depends on disabled stack-b
+    # stack-b depending on disabled stack-a should be allowed since stack-b is also disabled
+    from deploy_with_lambda_call import prepare_messages
+    
+    with pytest.raises(ValueError) as exc_info:
+        prepare_messages(config, stacks_file.as_posix())
+    
+    error_message = str(exc_info.value)
+    # Should complain about stack-c depending on disabled stack-b
+    assert "stack-c-development" in error_message
+    assert "stack-b-development" in error_message
+    # Should NOT complain about stack-b depending on disabled stack-a (both disabled)
+    assert "stack-a-development" not in error_message
+
+
+def test_fully_disabled_chain_is_allowed(tmpdir):
+    """Test that a fully disabled dependency chain works without errors."""
+    tempdir = Path(tmpdir)
+    environment = "development"
+    envdir = tempdir / environment
+
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    # Create stacks configuration where all stacks are disabled
+    stacks = {
+        "environment": environment,
+        "globals": {},
+        "stacks": [
+            {
+                "stack_name": "stack-a",
+                "template_file": "stack_a.yaml",
+                "disabled": True,
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "stack-b", 
+                "template_file": "stack_b.yaml",
+                "dependencies": ["stack-a"],  # Disabled depends on disabled - OK
+                "disabled": True,
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            },
+            {
+                "stack_name": "stack-c",
+                "template_file": "stack_c.yaml", 
+                "dependencies": ["stack-b"],  # Disabled depends on disabled - OK
+                "disabled": True,
+                "parameters": {
+                    "Environment": {"$ref": "Environment"}
+                }
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    # Create template files
+    for stack_name in ["stack_a", "stack_b", "stack_c"]:
+        stack_template = {
+            "AWSTemplateFormatVersion": "2010-09-09",
+            "Parameters": {
+                "Environment": {"Type": "String"}
+            },
+            "Resources": {
+                "TestResource": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {
+                        "BucketName": f"{stack_name}-bucket"
+                    }
+                }
+            }
+        }
+        
+        stack_template_file = envdir / f"{stack_name}.yaml"
+        with open(stack_template_file, "w") as f:
+            yaml.dump(stack_template, f)
+
+    config = yaml.safe_load(open(stacks_file))
+    
+    # Test that preparing messages works fine when all stacks in chain are disabled
+    from deploy_with_lambda_call import prepare_messages
+    
+    # Should NOT raise any error since all stacks are disabled
+    try:
+        message_generations, dependency_graph = prepare_messages(config, stacks_file.as_posix())
+        # Should succeed and return empty message generations since all stacks are disabled
+        assert len(message_generations) == 0 or all(len(generation) == 0 for generation in message_generations)
+    except ValueError:
+        pytest.fail("Should not raise ValueError when all stacks in dependency chain are disabled")
