@@ -28,6 +28,18 @@ inputs:
     description: 'Optional version identifier to associate with the configuration objects'
     required: false
     default: ''
+  temporary-corpus-key:
+    description: 'Optional: Deploy to a temporary corpus key with TTL (format: TEMP_12345 or auto-generated if set to "auto")'
+    required: false
+    default: ''
+  temporary-corpus-key-ttl-hours:
+    description: 'TTL for temporary corpus key in hours'
+    required: false
+    default: '24'
+  test-bot-url-template:
+    description: 'Optional: Jinja2 URL template for the test bot (e.g., "https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/")'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -55,6 +67,15 @@ runs:
         echo "  Environment: ${{ inputs.environment }}"
         echo "  Lambda function: ${{ inputs.lambda-function-name }}"
         echo "  Project root: ${{ inputs.project-root-path }}"
+        
+        if [ -n "${{ inputs.temporary-corpus-key }}" ]; then
+          if [ "${{ inputs.temporary-corpus-key }}" = "auto" ]; then
+            echo "  🧪 Temporary deployment: Auto-generated corpus key"
+          else
+            echo "  🧪 Temporary deployment: ${{ inputs.temporary-corpus-key }}"
+          fi
+          echo "  ⏰ TTL: ${{ inputs.temporary-corpus-key-ttl-hours }} hours"
+        fi
         echo ""
         
         COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -67,9 +88,16 @@ runs:
           --environment "${{ inputs.environment }}" \
           --lambda-function-name "${{ inputs.lambda-function-name }}" \
           --project-root-path "${{ inputs.project-root-path }}" \
-          --version-id "$VERSION_ID"
+          --version-id "$VERSION_ID" \
+          --temporary-corpus-key "${{ inputs.temporary-corpus-key }}" \
+          --temporary-corpus-key-ttl-hours "${{ inputs.temporary-corpus-key-ttl-hours }}" \
+          --test-bot-url-template "${{ inputs.test-bot-url-template }}"
         
-        echo "✅ Configuration deployment completed successfully!"
+        if [ -n "${{ inputs.temporary-corpus-key }}" ]; then
+          echo "🧪 Temporary bot deployment completed - will auto-expire in ${{ inputs.temporary-corpus-key-ttl-hours }} hours"
+        else
+          echo "✅ Configuration deployment completed successfully!"
+        fi
 
 branding:
   icon: 'upload-cloud'

@@ -1,12 +1,150 @@
 import argparse
+import copy
 import json
 import logging
+import time
+import uuid
+from decimal import Decimal
 from pathlib import Path
 
 import boto3
 import yaml
 
 _logger = logging.getLogger(__name__)
+
+
+# Object type recognition (adapted from poemai-config)
+obj_type_recognition_map = {
+    ("CORPUS_KEY", "ASSISTANT_ID"): "ASSISTANT",
+    ("CORPUS_METADATA", "CORPUS_KEY"): "CORPUS_METADATA", 
+    ("CORPUS_KEY", "CASE_MANAGER_ID"): "CASE_MANAGER",
+}
+
+id_name_by_object_type = {
+    "ASSISTANT": "assistant_id",
+    "CORPUS_METADATA": "corpus_key", 
+    "CASE_MANAGER": "case_manager_id",
+}
+
+
+def calc_obj_type(obj):
+    """Calculate object type from pk/sk keys"""
+    pk = obj.get("pk", "")
+    sk = obj.get("sk", "")
+    return obj_type_recognition_map.get((pk.split("#")[0], sk.split("#")[0]), None)
+
+
+def replace_floats_with_decimal(obj):
+    """Convert floats to Decimal for DynamoDB compatibility"""
+    if isinstance(obj, dict):
+        return {key: replace_floats_with_decimal(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [replace_floats_with_decimal(item) for item in obj]
+    elif isinstance(obj, float):
+        return Decimal(str(obj))
+    else:
+        return obj
+
+
+def replace_decimal_with_string(obj):
+    """Convert Decimal back to string for JSON serialization"""
+    if isinstance(obj, dict):
+        return {key: replace_decimal_with_string(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [replace_decimal_with_string(item) for item in obj]
+    elif isinstance(obj, Decimal):
+        return str(obj)
+    else:
+        return obj
+
+
+def transform_for_temporary_corpus_key(objects_to_load, new_corpus_key, ttl_seconds):
+    """Transform objects for temporary corpus key deployment with TTL"""
+    _logger.info(f"Transforming {len(objects_to_load)} objects for temporary corpus key: {new_corpus_key}")
+    
+    # Collect all existing IDs and create mapping
+    key_mapping = {}
+    objects_by_id = {}
+    
+    # First pass: collect all object IDs
+    for obj in objects_to_load:
+        obj_type = calc_obj_type(obj)
+        if obj_type and obj_type in id_name_by_object_type:
+            id_name = id_name_by_object_type[obj_type]
+            old_id = obj.get(id_name)
+            if old_id:
+                key_mapping[old_id] = uuid.uuid4().hex
+                objects_by_id[old_id] = obj
+                _logger.debug(f"Mapped {obj_type} ID {old_id} -> {key_mapping[old_id]}")
+    
+    # Second pass: transform all objects
+    transformed_objects = []
+    for obj in objects_to_load:
+        obj_type = calc_obj_type(obj)
+        transformed_obj = copy.deepcopy(obj)
+        
+        # Set new corpus key and TTL for all objects
+        transformed_obj["corpus_key"] = new_corpus_key
+        transformed_obj["ttl"] = ttl_seconds
+        
+        if obj_type == "CORPUS_METADATA":
+            # For corpus metadata, use the new corpus key as the ID
+            new_id = new_corpus_key
+            transformed_obj["corpus_key"] = new_corpus_key
+            
+            # Update case manager references if they exist
+            if "ui_settings" in transformed_obj:
+                ui_settings = transformed_obj["ui_settings"] 
+                if "case_manager" in ui_settings:
+                    case_manager = ui_settings["case_manager"]
+                    if "case_manager_default_case_manager_id" in case_manager:
+                        old_cm_id = case_manager["case_manager_default_case_manager_id"]
+                        if old_cm_id in key_mapping:
+                            case_manager["case_manager_default_case_manager_id"] = key_mapping[old_cm_id]
+                            _logger.info(f"Updated case_manager_default_case_manager_id from {old_cm_id} to {key_mapping[old_cm_id]}")
+                            
+        elif obj_type in id_name_by_object_type:
+            # For other object types, use the mapped ID
+            id_name = id_name_by_object_type[obj_type]
+            old_id = transformed_obj.get(id_name)
+            if old_id in key_mapping:
+                new_id = key_mapping[old_id]
+                transformed_obj[id_name] = new_id
+                _logger.debug(f"Updated {obj_type} {id_name} from {old_id} to {new_id}")
+        
+        # Convert floats to Decimal and back to string for JSON compatibility
+        transformed_obj = replace_floats_with_decimal(transformed_obj)
+        transformed_obj = replace_decimal_with_string(transformed_obj)
+        
+        # Ensure TTL is properly formatted
+        transformed_obj["ttl"] = int(ttl_seconds)
+        
+        transformed_objects.append(transformed_obj)
+        _logger.debug(f"Transformed {obj_type} object for corpus key {new_corpus_key}")
+    
+    _logger.info(f"Successfully transformed {len(transformed_objects)} objects for temporary deployment")
+    return transformed_objects
+
+
+def generate_test_bot_url(url_template, corpus_key):
+    """Generate test bot URL from template and corpus key"""
+    if not url_template or not corpus_key:
+        return None
+    
+    # Simple Jinja2-style template substitution
+    try:
+        # Support both {corpus_key} and {{ corpus_key }} formats
+        url = url_template.replace("{corpus_key}", corpus_key)
+        url = url.replace("{{ corpus_key }}", corpus_key)
+        return url
+    except Exception as e:
+        _logger.warning(f"Failed to generate URL from template '{url_template}': {e}")
+        return None
+
+
+def generate_temporary_corpus_key():
+    """Generate a unique temporary corpus key"""
+    return f"TEMP_{uuid.uuid4().hex[:10].upper()}"
 
 
 def gather_json_representations(environment, project_root_path="."):
@@ -69,11 +207,68 @@ if __name__ == "__main__":
         default=".",
         help="Path to the project root directory",
     )
+    parser.add_argument(
+        "--temporary-corpus-key",
+        required=False,
+        type=str,
+        default="",
+        help="Optional temporary corpus key for testing deployments with TTL. Use 'auto' to generate automatically.",
+    )
+    parser.add_argument(
+        "--temporary-corpus-key-ttl-hours",
+        required=False,
+        type=int,
+        default=24,
+        help="TTL for temporary corpus key in hours (default: 24)",
+    )
+    parser.add_argument(
+        "--test-bot-url-template",
+        required=False,
+        type=str,
+        default="",
+        help="Optional Jinja2 URL template for test bot (e.g., 'https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/')",
+    )
     # parse arguments
     args, unknown = parser.parse_known_args()
 
+    # Handle temporary corpus key
+    temporary_corpus_key = args.temporary_corpus_key.strip()
+    if temporary_corpus_key.lower() == "auto":
+        temporary_corpus_key = generate_temporary_corpus_key()
+        _logger.info(f"Generated automatic temporary corpus key: {temporary_corpus_key}")
+    elif temporary_corpus_key:
+        _logger.info(f"Using provided temporary corpus key: {temporary_corpus_key}")
+
     # gather all json representations
     objects_to_load = gather_json_representations(args.environment, args.project_root_path)
+
+    # Apply temporary corpus key transformation if specified
+    if temporary_corpus_key:
+        ttl_seconds = int(time.time() + (args.temporary_corpus_key_ttl_hours * 3600))
+        _logger.info(f"Transforming objects for temporary corpus key '{temporary_corpus_key}' with TTL of {args.temporary_corpus_key_ttl_hours} hours")
+        objects_to_load = transform_for_temporary_corpus_key(objects_to_load, temporary_corpus_key, ttl_seconds)
+        
+        # Verify exactly one corpus key exists after transformation
+        corpus_keys = set()
+        for obj in objects_to_load:
+            if "corpus_key" in obj:
+                corpus_keys.add(obj["corpus_key"])
+        
+        if len(corpus_keys) != 1:
+            _logger.error(f"Expected exactly one corpus key after transformation, found {len(corpus_keys)}: {corpus_keys}")
+            exit(1)
+            
+        _logger.info(f"✅ Temporary deployment prepared with corpus key: {temporary_corpus_key} (expires in {args.temporary_corpus_key_ttl_hours} hours)")
+        
+        # Generate test bot URL if template provided
+        if args.test_bot_url_template:
+            test_bot_url = generate_test_bot_url(args.test_bot_url_template, temporary_corpus_key)
+            if test_bot_url:
+                _logger.info(f"🔗 Test Bot URL: {test_bot_url}")
+                # Also output for GitHub Actions to pick up
+                print(f"::notice title=Test Bot URL::🔗 {test_bot_url}")
+            else:
+                _logger.warning("Failed to generate test bot URL from template")
 
     # Optionally add version ID to objects
     if args.version_id:
