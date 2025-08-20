@@ -66,6 +66,7 @@ runs:
         python ${{ github.action_path }}/deploy_config_with_lambda_call.py \
           --environment "${{ inputs.environment }}" \
           --lambda-function-name "${{ inputs.lambda-function-name }}" \
+          --project-root-path "${{ inputs.project-root-path }}" \
           --version-id "$VERSION_ID"
         
         echo "✅ Configuration deployment completed successfully!"

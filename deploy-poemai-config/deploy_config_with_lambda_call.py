@@ -9,12 +9,12 @@ import yaml
 _logger = logging.getLogger(__name__)
 
 
-def gather_json_representations(environment):
+def gather_json_representations(environment, project_root_path="."):
     """
     Gather all json representations of the configuration files
     """
 
-    path = Path(__file__).parent.parent / "environments" / environment / "corpus_keys"
+    path = Path(project_root_path).absolute() / "environments" / environment / "corpus_keys"
 
     # traverse the directory tree and look for all yaml files
 
@@ -62,11 +62,18 @@ if __name__ == "__main__":
         type=str,
         help="Optional version identifier to associate with the configuration objects.",
     )
+    parser.add_argument(
+        "--project-root-path",
+        required=False,
+        type=str,
+        default=".",
+        help="Path to the project root directory",
+    )
     # parse arguments
     args, unknown = parser.parse_known_args()
 
     # gather all json representations
-    objects_to_load = gather_json_representations(args.environment)
+    objects_to_load = gather_json_representations(args.environment, args.project_root_path)
 
     # Optionally add version ID to objects
     if args.version_id:
