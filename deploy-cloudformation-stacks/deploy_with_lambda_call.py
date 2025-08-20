@@ -39,16 +39,16 @@ for tag in ["!Select"]:
 
 def load_globals_from_file(file_path):
     """Load global variables from a file.
-    
+
     Args:
         file_path (str): Path to the file containing key=value pairs
-        
+
     Returns:
         dict: Dictionary of loaded key-value pairs
     """
     if not os.path.exists(file_path):
         return {}
-    
+
     globals_dict = {}
     with open(file_path, "r") as file:
         for line in file:
@@ -56,7 +56,7 @@ def load_globals_from_file(file_path):
                 continue
             key, value = line.strip().split("=", 1)
             globals_dict[key.strip()] = value.strip()
-    
+
     return globals_dict
 
 
@@ -318,7 +318,7 @@ def create_message(
             f"Template file {template_file} is empty or contains only comments. "
             f"CloudFormation templates must contain at least a basic structure with Resources section."
         )
-    
+
     if not isinstance(template_content, dict):
         raise ValueError(
             f"Template file {template_file} does not contain a valid CloudFormation template structure. "
@@ -445,12 +445,12 @@ def create_message(
 def resolve_version_with_hash_support(repo, repo_versions, key_name):
     """
     Enhanced version resolution that supports hash-based individual lambda versions.
-    
+
     Args:
         repo: The repository name (e.g., "poemAI-ch/poemai-lambdas" or "poemAI-ch/poemai-lambdas#lambda_name")
         repo_versions: Dictionary containing version mappings
         key_name: The key being resolved (e.g., "BotAdminLambdaVersion")
-        
+
     Returns:
         str: Either the short SHA (first 7 chars) for repo-wide versions,
              or the full hash for individual lambda versions
@@ -461,19 +461,19 @@ def resolve_version_with_hash_support(repo, repo_versions, key_name):
         # New format: Look for the full key with repo#lambda_name
         if repo in repo_versions:
             return repo_versions[repo]
-        
+
         # Backward compatibility: Try the old format where lambda names were stored without repo prefix
         base_repo, lambda_name = repo.rsplit("#", 1)
         if lambda_name in repo_versions:
             return repo_versions[lambda_name]
-        
+
         return None
-    
+
     # Traditional repo-wide version
     if repo in repo_versions:
         full_sha = repo_versions[repo]
         return full_sha[:7]
-    
+
     return None
 
 
@@ -508,7 +508,9 @@ def prepare_messages(config, config_file):
         if isinstance(value, dict):
             if "$version" in value:
                 repo = value["$version"]
-                resolved_version = resolve_version_with_hash_support(repo, repo_versions, key)
+                resolved_version = resolve_version_with_hash_support(
+                    repo, repo_versions, key
+                )
                 if resolved_version is not None:
                     globals[key] = resolved_version
                     _logger.debug(
@@ -609,17 +611,20 @@ def prepare_messages(config, config_file):
                     raise ValueError(
                         f"Dependency {dependency_full_name} not found in stacks"
                     )
-                
+
                 # Check if an ENABLED stack depends on a disabled stack
                 # (Disabled stacks can depend on disabled stacks - that's fine)
                 is_current_stack_disabled = stack.get("disabled", False)
-                if not is_current_stack_disabled and dependency_full_name in disabled_stack_names:
+                if (
+                    not is_current_stack_disabled
+                    and dependency_full_name in disabled_stack_names
+                ):
                     raise ValueError(
                         f"Stack {stack_name} depends on disabled stack {dependency_full_name}. "
                         f"Cannot deploy a stack that depends on a disabled stack. "
                         f"Either enable the dependency or remove the dependency."
                     )
-                
+
                 dependency_graph.add_edge(stack_name, dependency_full_name)
 
     # Check for unused globals
@@ -813,7 +818,9 @@ def deploy(lambda_function_name, config, config_file, stack_name=None):
                 not all([d in successful_stacks for d in descendants])
                 and not stack_name
             ):
-                missing_dependencies = [d for d in descendants if d not in successful_stacks]
+                missing_dependencies = [
+                    d for d in descendants if d not in successful_stacks
+                ]
                 error_msg = (
                     f"Cannot deploy {stack_candidate['message']['stack_name']} because the following "
                     f"dependencies have not been successfully deployed: {missing_dependencies}. "
@@ -925,44 +932,50 @@ def validate_stack_name_filter(config, config_global_environment, stack_name_fil
     """
     if stack_name_filter is None:
         return True
-    
+
     # Get all stack names (both full and stripped)
     all_stacks = config.get("stacks", [])
     full_stack_names = []
     stripped_stack_names = []
-    
+
     for stack in all_stacks:
         if stack.get("disabled", False):
             continue
-            
+
         full_name = calc_stack_name(stack["stack_name"], config_global_environment)
         stripped_name = strip_environment_suffix(full_name)
-        
+
         full_stack_names.append(full_name)
         stripped_stack_names.append(stripped_name)
-    
+
     # Check if the filter matches any stack (full or stripped name)
     matches_any = False
     for full_name in full_stack_names:
         if compare_stack_names(full_name, stack_name_filter):
             matches_any = True
             break
-    
+
     if not matches_any:
-        _logger.error(f"❌ Stack name '{stack_name_filter}' does not match any available stacks.")
+        _logger.error(
+            f"❌ Stack name '{stack_name_filter}' does not match any available stacks."
+        )
         _logger.error(f"Available stack names (without environment suffix):")
         for stripped_name in sorted(set(stripped_stack_names)):
             _logger.error(f"  - {stripped_name}")
         _logger.error(f"Available full stack names:")
         for full_name in sorted(set(full_stack_names)):
             _logger.error(f"  - {full_name}")
-        _logger.error(f"Note: You can use either the full name (with environment suffix) or just the base name.")
+        _logger.error(
+            f"Note: You can use either the full name (with environment suffix) or just the base name."
+        )
         raise SystemExit(1)
-    
+
     return True
 
 
-def do_dump(config, config_file, config_global_environment, verbose=False, stack_name=None):
+def do_dump(
+    config, config_file, config_global_environment, verbose=False, stack_name=None
+):
 
     # Validate stack name filter if provided (do this before any processing that modifies config)
     validate_stack_name_filter(config, config_global_environment, stack_name)
@@ -971,14 +984,16 @@ def do_dump(config, config_file, config_global_environment, verbose=False, stack
 
     total_stacks = 0
     successful_stacks = 0
-    
+
     for i, messages in enumerate(message_generations):
         if verbose:
             _logger.info(f"*** Generation {i}:")
         for message_spec in messages:
             message = message_spec["message"]
             stack = message_spec["stack"]
-            current_stack_name = message["stack_name"]  # Already calculated in prepare_messages
+            current_stack_name = message[
+                "stack_name"
+            ]  # Already calculated in prepare_messages
 
             # Filter by specific stack name if provided
             if stack_name is not None and not compare_stack_names(
@@ -991,7 +1006,7 @@ def do_dump(config, config_file, config_global_environment, verbose=False, stack
             template_file_name = stack.get("template_file")
             if not template_file_name:
                 template_file_name = calc_template_file_name(stack["stack_name"])
-            
+
             if verbose:
                 _logger.info(
                     f"Message for {current_stack_name} using template {template_file_name}:"
@@ -1005,16 +1020,22 @@ def do_dump(config, config_file, config_global_environment, verbose=False, stack
             else:
                 # Just show a summary line
                 param_count = len(message["parameters"])
-                _logger.info(f"✓ {current_stack_name} using {template_file_name} ({param_count} parameters)")
-            
+                _logger.info(
+                    f"✓ {current_stack_name} using {template_file_name} ({param_count} parameters)"
+                )
+
             successful_stacks += 1
 
     if not verbose:
-        _logger.info(f"\n📋 Summary: Successfully processed {successful_stacks}/{total_stacks} templates")
+        _logger.info(
+            f"\n📋 Summary: Successfully processed {successful_stacks}/{total_stacks} templates"
+        )
         if successful_stacks == total_stacks:
             _logger.info("✅ All templates validated successfully!")
         else:
-            _logger.error(f"❌ {total_stacks - successful_stacks} templates failed validation")
+            _logger.error(
+                f"❌ {total_stacks - successful_stacks} templates failed validation"
+            )
 
 
 def setup_logging(verbose=False):
@@ -1022,28 +1043,30 @@ def setup_logging(verbose=False):
     # Remove any existing handlers
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
-    
+
     # Set overall level based on verbose flag
     level = logging.DEBUG if verbose else logging.INFO
     root_logger.setLevel(level)
-    
+
     # Create formatter
-    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
-    
+    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+
     # INFO handler -> stdout (only shows INFO, not DEBUG)
     info_handler = logging.StreamHandler(sys.stdout)
     info_handler.setLevel(logging.INFO)
     info_handler.setFormatter(formatter)
-    info_handler.addFilter(lambda record: logging.INFO <= record.levelno < logging.WARNING)
-    
-    # WARNING/ERROR handler -> stderr  
+    info_handler.addFilter(
+        lambda record: logging.INFO <= record.levelno < logging.WARNING
+    )
+
+    # WARNING/ERROR handler -> stderr
     error_handler = logging.StreamHandler(sys.stderr)
     error_handler.setLevel(logging.WARNING)
     error_handler.setFormatter(formatter)
-    
+
     root_logger.addHandler(info_handler)
     root_logger.addHandler(error_handler)
-    
+
     # If verbose, also add DEBUG handler to stdout
     if verbose:
         debug_handler = logging.StreamHandler(sys.stdout)
@@ -1051,6 +1074,7 @@ def setup_logging(verbose=False):
         debug_handler.setFormatter(formatter)
         debug_handler.addFilter(lambda record: record.levelno == logging.DEBUG)
         root_logger.addHandler(debug_handler)
+
 
 def main():
     # Initial basic setup for argument parsing
@@ -1104,19 +1128,20 @@ def main():
             action="store",
             help="Use a file used to override globals",
         )
-        
+
         if command == "dump":
             subparser.add_argument(
-                "--verbose", "-v",
+                "--verbose",
+                "-v",
                 action="store_true",
                 help="Show full template content (default: summary only)",
             )
 
     # parse arguments
     args, unknown = parser.parse_known_args()
-    
+
     # Setup proper logging based on verbose flag
-    verbose = getattr(args, 'verbose', False)
+    verbose = getattr(args, "verbose", False)
     setup_logging(verbose)
 
     config = None
@@ -1163,9 +1188,11 @@ def main():
         )
 
     elif args.command == "dump":
-        verbose = getattr(args, 'verbose', False)
-        stack_name = getattr(args, 'stack_name', None)
-        do_dump(config, args.config_file, config_global_environment, verbose, stack_name)
+        verbose = getattr(args, "verbose", False)
+        stack_name = getattr(args, "stack_name", None)
+        do_dump(
+            config, args.config_file, config_global_environment, verbose, stack_name
+        )
     elif args.command == "dump_graph":
         do_dump_graph(config, args.config_file)
 
