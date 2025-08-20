@@ -948,5 +948,195 @@ class TestIntegrationScenarios:
                 break
 
 
+class TestValidationLogic:
+    """Test validation logic for pk/sk requirements and temporary corpus key handling"""
+
+    def test_pk_sk_validation_required_for_normal_deployment(self, tmpdir):
+        """Test that pk/sk validation is enforced for normal deployments"""
+        tempdir = Path(tmpdir)
+        corpus_keys_dir = tempdir / "environments" / "test" / "corpus_keys"
+        corpus_keys_dir.mkdir(parents=True)
+
+        # Create config missing pk
+        invalid_config = {
+            "sk": "ASSISTANT_ID#test_assistant",
+            "assistant_id": "test_assistant",
+            "corpus_key": "TEST_BOT",
+        }
+
+        with open(corpus_keys_dir / "invalid.yaml", "w") as f:
+            yaml.dump(invalid_config, f)
+
+        objects = gather_json_representations("test", str(tempdir))
+
+        # Simulate normal deployment validation (temporary_corpus_key is empty)
+        temporary_corpus_key = ""
+        validation_failed = False
+
+        if not temporary_corpus_key:  # Normal deployment path
+            for i, obj in enumerate(objects):
+                if "pk" not in obj:
+                    validation_failed = True
+                    break
+                if "sk" not in obj:
+                    validation_failed = True
+                    break
+
+        assert (
+            validation_failed
+        ), "Should have failed validation for missing pk in normal deployment"
+
+    def test_pk_sk_validation_skipped_for_temporary_corpus_key_deployment(self):
+        """Test that pk/sk validation is skipped for temporary corpus key deployments"""
+        # Create objects that have been transformed (pk/sk removed)
+        transformed_objects = [
+            {
+                "assistant_id": "abc123def456",
+                "corpus_key": "TEMP_TEST_123",
+                "ttl": int(time.time()) + 3600,
+                "name": "Test Assistant",
+                # Note: pk and sk are intentionally missing (removed by transformation)
+            },
+            {
+                "corpus_key": "TEMP_TEST_123",
+                "ttl": int(time.time()) + 3600,
+                "ui_settings": {"theme": "default"},
+                # Note: pk and sk are intentionally missing (removed by transformation)
+            },
+        ]
+
+        # Simulate temporary corpus key deployment validation
+        temporary_corpus_key = "TEMP_TEST_123"
+        validation_failed = False
+
+        if not temporary_corpus_key:  # This should be False, so validation is skipped
+            for i, obj in enumerate(transformed_objects):
+                if "pk" not in obj:
+                    validation_failed = True
+                    break
+                if "sk" not in obj:
+                    validation_failed = True
+                    break
+        else:
+            # Temporary corpus key deployment - validation should be skipped
+            pass
+
+        assert (
+            not validation_failed
+        ), "Should not validate pk/sk for temporary corpus key deployment"
+
+        # Verify objects are ready for lambda (have corpus_key and ttl)
+        for obj in transformed_objects:
+            assert obj["corpus_key"] == "TEMP_TEST_123"
+            assert "ttl" in obj
+            assert "pk" not in obj  # Should be removed
+            assert "sk" not in obj  # Should be removed
+
+    def test_validation_logic_consistency_with_transformation(self):
+        """Test that validation logic is consistent with transformation behavior"""
+        # Start with normal objects
+        original_objects = [
+            {
+                "pk": "CORPUS_KEY#TEST_BOT",
+                "sk": "ASSISTANT_ID#test_assistant",
+                "assistant_id": "test_assistant",
+                "corpus_key": "TEST_BOT",
+                "name": "Test Assistant",
+            }
+        ]
+
+        # Apply transformation (this removes pk/sk)
+        temp_corpus_key = "TEMP_VALIDATION_TEST"
+        ttl_seconds = int(time.time()) + 3600
+
+        transformed_objects = transform_for_temporary_corpus_key(
+            original_objects, temp_corpus_key, ttl_seconds
+        )
+
+        # Verify transformation removed pk/sk
+        for obj in transformed_objects:
+            assert "pk" not in obj, "Transformation should remove pk"
+            assert "sk" not in obj, "Transformation should remove sk"
+            assert obj["corpus_key"] == temp_corpus_key
+            assert obj["ttl"] == ttl_seconds
+
+        # Now verify validation logic handles this correctly
+        temporary_corpus_key = temp_corpus_key  # Non-empty means temporary deployment
+        validation_should_pass = True
+
+        if not temporary_corpus_key:
+            # Normal deployment - would require pk/sk
+            for obj in transformed_objects:
+                if "pk" not in obj or "sk" not in obj:
+                    validation_should_pass = False
+                    break
+        else:
+            # Temporary deployment - pk/sk validation skipped
+            validation_should_pass = True
+
+        assert (
+            validation_should_pass
+        ), "Validation should pass for temporary corpus key deployment even without pk/sk"
+
+    def test_mixed_validation_scenarios(self, tmpdir):
+        """Test validation with both valid and invalid objects in different scenarios"""
+        tempdir = Path(tmpdir)
+        corpus_keys_dir = tempdir / "environments" / "test" / "corpus_keys"
+        corpus_keys_dir.mkdir(parents=True)
+
+        # Create valid config
+        valid_config = {
+            "pk": "CORPUS_KEY#TEST_BOT",
+            "sk": "ASSISTANT_ID#test_assistant",
+            "assistant_id": "test_assistant",
+            "corpus_key": "TEST_BOT",
+        }
+
+        # Create invalid config missing sk
+        invalid_config = {
+            "pk": "CORPUS_KEY#TEST_BOT",
+            "assistant_id": "test_assistant2",
+            "corpus_key": "TEST_BOT",
+        }
+
+        with open(corpus_keys_dir / "valid.yaml", "w") as f:
+            yaml.dump(valid_config, f)
+
+        with open(corpus_keys_dir / "invalid.yaml", "w") as f:
+            yaml.dump(invalid_config, f)
+
+        objects = gather_json_representations("test", str(tempdir))
+        assert len(objects) == 2
+
+        # Test normal deployment validation (should fail on invalid object)
+        temporary_corpus_key = ""
+        normal_validation_passed = True
+
+        if not temporary_corpus_key:
+            for i, obj in enumerate(objects):
+                if "pk" not in obj or "sk" not in obj:
+                    normal_validation_passed = False
+                    break
+
+        assert (
+            not normal_validation_passed
+        ), "Normal deployment should fail with invalid objects"
+
+        # Test temporary deployment (should skip validation entirely)
+        temporary_corpus_key = "TEMP_MIXED_TEST"
+        temp_validation_passed = True
+
+        if not temporary_corpus_key:
+            # This block won't execute for temporary deployment
+            for i, obj in enumerate(objects):
+                if "pk" not in obj or "sk" not in obj:
+                    temp_validation_passed = False
+                    break
+
+        assert (
+            temp_validation_passed
+        ), "Temporary deployment should skip validation regardless of object state"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

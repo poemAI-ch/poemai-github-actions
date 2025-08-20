@@ -325,20 +325,29 @@ if __name__ == "__main__":
             obj["version_id"] = args.version_id
             obj["_version_id"] = args.version_id  # add both for backwards compatibility
 
-    for i, obj in enumerate(objects_to_load):
-        if "pk" not in obj:
-            _logger.error(
-                f"Object {i} does not have a primary key. Object:\n{json.dumps(obj, indent=2, ensure_ascii=False)}"
-            )
-            exit(1)
-        if "sk" not in obj:
-            _logger.error(
-                f"Object {i} does not have a sort key. Object:\n{json.dumps(obj, indent=2, ensure_ascii=False)}"
-            )
-            exit(1)
+    # Validate pk/sk presence (skip for temporary corpus key deployments since they're removed)
+    if not temporary_corpus_key:
+        for i, obj in enumerate(objects_to_load):
+            if "pk" not in obj:
+                _logger.error(
+                    f"Object {i} does not have a primary key. Object:\n{json.dumps(obj, indent=2, ensure_ascii=False)}"
+                )
+                exit(1)
+            if "sk" not in obj:
+                _logger.error(
+                    f"Object {i} does not have a sort key. Object:\n{json.dumps(obj, indent=2, ensure_ascii=False)}"
+                )
+                exit(1)
 
+            _logger.info(
+                f"Object {i}:\n{json.dumps(obj, indent=2, ensure_ascii=False)}\n--------------------------------\n"
+            )
+    else:
         _logger.info(
-            f"Object {i}:\n{json.dumps(obj, indent=2, ensure_ascii=False)}\n--------------------------------\n"
+            "Skipping pk/sk validation for temporary corpus key deployment (lambda will regenerate them)"
+        )
+        _logger.info(
+            f"Prepared {len(objects_to_load)} objects for temporary deployment"
         )
 
     request = {

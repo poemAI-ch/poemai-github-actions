@@ -593,6 +593,80 @@ class TestErrorScenarios:
             )
             assert result.returncode == 1  # Fails at Lambda stage, not at parsing
 
+    def test_validation_skipped_for_temporary_corpus_key_cli(self):
+        """Test that CLI properly skips pk/sk validation for temporary corpus key deployments"""
+        script_path = Path(__file__).parent.parent / "deploy_config_with_lambda_call.py"
+
+        # Set mock AWS credentials
+        env = {
+            **dict(os.environ),
+            "AWS_ACCESS_KEY_ID": "test_key",
+            "AWS_SECRET_ACCESS_KEY": "test_secret",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corpus_keys_dir = (
+                Path(tmpdir) / "environments" / "staging" / "corpus_keys" / "TEST_BOT"
+            )
+            corpus_keys_dir.mkdir(parents=True)
+
+            # Create config that will have pk/sk removed by transformation
+            test_config = {
+                "pk": "CORPUS_KEY#TEST_BOT",
+                "sk": "ASSISTANT_ID#test_assistant",
+                "assistant_id": "test_assistant",
+                "corpus_key": "TEST_BOT",
+                "name": "Test Assistant",
+            }
+
+            with open(corpus_keys_dir / "assistant.yaml", "w") as f:
+                yaml.dump(test_config, f)
+
+            # Run with temporary corpus key
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--environment",
+                    "staging",
+                    "--lambda-function-name",
+                    "test-function",
+                    "--project-root-path",
+                    tmpdir,
+                    "--temporary-corpus-key",
+                    "TEMP_VALIDATION_TEST",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            # Should show validation being skipped
+            assert (
+                "Skipping pk/sk validation for temporary corpus key deployment"
+                in result.stderr
+            )
+
+            # Should show successful transformation
+            assert (
+                "Successfully transformed 1 objects for temporary deployment"
+                in result.stderr
+            )
+
+            # Should show temporary deployment preparation
+            assert (
+                "Temporary deployment prepared with corpus key: TEMP_VALIDATION_TEST"
+                in result.stderr
+            )
+
+            # Should NOT show pk/sk validation errors
+            assert "does not have a primary key" not in result.stderr
+            assert "does not have a sort key" not in result.stderr
+
+            # Should fail at Lambda invocation (expected in test), not at validation
+            assert result.returncode == 1
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
