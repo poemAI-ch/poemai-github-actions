@@ -1,0 +1,72 @@
+name: 'Update Versions File'
+description: 'Update upstream versions file for both hash-based and regular builds'
+author: 'poemAI-ch'
+
+inputs:
+  versions-file-path:
+    description: 'Path to the versions file (e.g., .poemai-upstream-versions.yaml)'
+    required: true
+    default: '.poemai-upstream-versions.yaml'
+  upstream-repo:
+    description: 'Upstream repository name (e.g., poemAI-ch/repo-name)'
+    required: true
+  upstream-sha:
+    description: 'Upstream repository SHA for regular builds'
+    required: false
+    default: ''
+  manifest-url:
+    description: 'Manifest URL for hash-based builds'
+    required: false
+    default: ''
+  build-number:
+    description: 'Build number for hash-based builds'
+    required: false
+    default: ''
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.12'
+
+outputs:
+  build-type:
+    description: 'Type of build detected (hash_based or regular)'
+    value: ${{ steps.update.outputs.build_type }}
+  file-updated:
+    description: 'Whether the versions file was updated (true/false)'
+    value: ${{ steps.update.outputs.file_updated }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        pip install pyyaml
+
+    - name: Update versions file
+      id: update
+      shell: bash
+      run: |
+        echo "🔄 Updating versions file..."
+        echo "Versions file: ${{ inputs.versions-file-path }}"
+        echo "Upstream repo: ${{ inputs.upstream-repo }}"
+        echo "Upstream SHA: ${{ inputs.upstream-sha }}"
+        echo "Manifest URL: ${{ inputs.manifest-url }}"
+        echo "Build number: ${{ inputs.build-number }}"
+        echo ""
+
+        python ${{ github.action_path }}/update_versions_file.py \
+          --versions-file "${{ inputs.versions-file-path }}" \
+          --upstream-repo "${{ inputs.upstream-repo }}" \
+          --upstream-sha "${{ inputs.upstream-sha }}" \
+          --manifest-url "${{ inputs.manifest-url }}" \
+          --build-number "${{ inputs.build-number }}"
+
+branding:
+  icon: 'file-text'
+  color: 'green'
