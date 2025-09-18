@@ -228,25 +228,57 @@ class TestVersionsFileUpdater:
         mock_s3_client = MagicMock()
         mock_boto3.client.return_value = mock_s3_client
 
-        # Mock S3 response with manifest data
-        manifest_yaml = """
-lambda1: abc123def456
-lambda2: def456ghi789
-lambda3: ghi789jkl012
+        # Mock S3 response with realistic manifest data from production
+        manifest_yaml = """versions:
+  llm_stream_get: 9eb7be765a8e
+  femto_semantic: e062e019c87b
+  sessions_tokens: 07ea2c43918f
+  url_monitor: 285a04dcc99b
+  rule_engine: 48136ea57187
+  crawler: e133466b6294
+  code_editor: 909745add6c6
+  auth_proxy: 42cc5172fccb
+  group_summary_builder: d344e6896fe2
+  trigger_crawl_processor: d4d22b9f9a0c
+  llm_streamer: 77490ea8d96c
+  config_deployer: 106435c0b60c
+  town_bot_sl: 764240f9a0f6
+  cases_and_assistants: c42be56c8e71
+  hello_world: 94070767b443
+  femto_keyword_search: c8eb346eea75
+  web_page_publisher: a694d7a368fc
+  rag_tool: 5c2462025de5
+  assistant_api: c02895c4e2f1
+  crawl_results_processor: 5b66579ef55e
+  bot_sl: ea259e507770
+  bot_admin: 7eb6777ed631
+  caritas_leistungen: 3e3cc332e13c
+build_info:
+  timestamp: '2025-09-18T13:51:05.269665Z'
+  commit_sha: 96b50db
+  build_number: '105'
+  platform: linux/amd64
+  branch: main
 """
         mock_response = {"Body": MagicMock()}
         mock_response["Body"].read.return_value = manifest_yaml.encode("utf-8")
         mock_s3_client.get_object.return_value = mock_response
 
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
-            initial_data = {"versions": {"poemAI-ch/other-repo": "old123"}}
+            initial_data = {
+                "versions": {
+                    "poemAI-ch/other-repo": "old123",
+                    "poemAI-ch/poemai-lambdas#group_summary_builder": "oldversion123",
+                }
+            }
             yaml.safe_dump(initial_data, f)
             temp_file = f.name
 
         try:
             updater = VersionsFileUpdater(temp_file)
             result = updater.update_hash_based_build(
-                "poemAI-ch/test-lambdas", "s3://test-bucket/path/to/manifest.yaml"
+                "poemAI-ch/poemai-lambdas",
+                "s3://poemai-artifacts/hash-based-manifests/poemai-lambdas/96b50db9f821ac594b65d1d43e421db50e490a76/lambda_versions.yaml",
             )
 
             assert result is True
@@ -254,25 +286,45 @@ lambda3: ghi789jkl012
             # Verify S3 client was called correctly
             mock_boto3.client.assert_called_once_with("s3", region_name="eu-central-2")
             mock_s3_client.get_object.assert_called_once_with(
-                Bucket="test-bucket", Key="path/to/manifest.yaml"
+                Bucket="poemai-artifacts",
+                Key="hash-based-manifests/poemai-lambdas/96b50db9f821ac594b65d1d43e421db50e490a76/lambda_versions.yaml",
             )
 
             # Check the updated file
             with open(temp_file, "r") as f:
                 data = yaml.safe_load(f)
 
-            expected = {
-                "versions": {
-                    "poemAI-ch/other-repo": "old123",
-                    "poemAI-ch/test-lambdas#lambda1": "abc123def456",
-                    "poemAI-ch/test-lambdas#lambda2": "def456ghi789",
-                    "poemAI-ch/test-lambdas#lambda3": "ghi789jkl012",
-                },
-                "hash_based_lambdas": {
-                    "poemAI-ch/test-lambdas": "s3://test-bucket/path/to/manifest.yaml"
-                },
-            }
-            assert data == expected
+            # Verify structure
+            assert "versions" in data
+            assert "hash_based_lambdas" in data
+
+            # Verify specific lambda versions were updated correctly
+            assert (
+                data["versions"]["poemAI-ch/poemai-lambdas#group_summary_builder"]
+                == "d344e6896fe2"
+            )
+            assert (
+                data["versions"]["poemAI-ch/poemai-lambdas#auth_proxy"]
+                == "42cc5172fccb"
+            )
+            assert (
+                data["versions"]["poemAI-ch/poemai-lambdas#llm_stream_get"]
+                == "9eb7be765a8e"
+            )
+            assert (
+                data["versions"]["poemAI-ch/poemai-lambdas#rule_engine"]
+                == "48136ea57187"
+            )
+
+            # Verify non-lambda versions were preserved
+            assert data["versions"]["poemAI-ch/other-repo"] == "old123"
+
+            # Verify manifest URL was updated
+            assert (
+                data["hash_based_lambdas"]["poemAI-ch/poemai-lambdas"]
+                == "s3://poemai-artifacts/hash-based-manifests/poemai-lambdas/96b50db9f821ac594b65d1d43e421db50e490a76/lambda_versions.yaml"
+            )
+
         finally:
             os.unlink(temp_file)
 
@@ -350,11 +402,17 @@ lambda3: ghi789jkl012
         try:
             updater = VersionsFileUpdater(temp_file)
 
-            # Valid manifest data
+            # Valid manifest data with versions section (like actual S3 manifest)
             manifest_data = {
-                "lambda1": "abc123def456",
-                "lambda2": "def456ghi789",
-                "lambda3": "ghi789jkl012",
+                "versions": {
+                    "lambda1": "abc123def456",
+                    "lambda2": "def456ghi789",
+                    "lambda3": "ghi789jkl012",
+                },
+                "build_info": {
+                    "timestamp": "2024-09-18T10:00:00Z",
+                    "commit": "abcd1234",
+                },
             }
 
             versions = updater._extract_lambda_versions(
@@ -367,6 +425,16 @@ lambda3: ghi789jkl012
                 "poemAI-ch/test-lambdas#lambda3": "ghi789jkl012",
             }
             assert versions == expected
+
+            # Test with old format (flat structure without versions section)
+            old_format_manifest = {
+                "lambda1": "abc123def456",
+                "lambda2": "def456ghi789",
+            }
+            versions = updater._extract_lambda_versions(
+                old_format_manifest, "poemAI-ch/test-lambdas"
+            )
+            assert versions == {}  # Should return empty dict when no versions section
 
             # Empty manifest
             versions = updater._extract_lambda_versions({}, "poemAI-ch/test-lambdas")

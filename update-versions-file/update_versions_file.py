@@ -135,15 +135,22 @@ class VersionsFileUpdater:
         """
         lambda_versions = {}
 
-        # The manifest should contain lambda versions in a format like:
-        # lambda_name: version_hash
-        if isinstance(manifest_data, dict):
-            for lambda_name, version in manifest_data.items():
-                if isinstance(version, str):
-                    # Create the full lambda reference
-                    lambda_ref = f"{upstream_repo}#{lambda_name}"
-                    lambda_versions[lambda_ref] = version
-                    print(f"  📦 Found lambda: {lambda_ref} -> {version}")
+        # The manifest should contain lambda versions in a 'versions' section like:
+        # versions:
+        #   lambda_name: version_hash
+        if isinstance(manifest_data, dict) and "versions" in manifest_data:
+            versions_section = manifest_data["versions"]
+            if isinstance(versions_section, dict):
+                for lambda_name, version in versions_section.items():
+                    if isinstance(version, str):
+                        # Create the full lambda reference
+                        lambda_ref = f"{upstream_repo}#{lambda_name}"
+                        lambda_versions[lambda_ref] = version
+                        print(f"  📦 Found lambda: {lambda_ref} -> {version}")
+            else:
+                print("⚠️ Versions section is not a dictionary")
+        else:
+            print("⚠️ No 'versions' section found in manifest")
 
         return lambda_versions
 
