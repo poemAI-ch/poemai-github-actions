@@ -22,6 +22,14 @@ inputs:
     description: 'Build number for hash-based builds'
     required: false
     default: ''
+  aws-role-arn:
+    description: 'AWS IAM role ARN to assume for S3 access (optional, for hash-based builds)'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS region for S3 access (optional, for hash-based builds)'
+    required: false
+    default: 'eu-central-2'
   python-version:
     description: 'Python version to use'
     required: false
@@ -46,7 +54,15 @@ runs:
     - name: Install dependencies
       shell: bash
       run: |
-        pip install pyyaml
+        pip install pyyaml boto3
+
+    - name: Configure AWS credentials (if provided)
+      if: ${{ inputs.aws-role-arn != '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        audience: sts.amazonaws.com
 
     - name: Update versions file
       id: update
@@ -58,6 +74,8 @@ runs:
         echo "Upstream SHA: ${{ inputs.upstream-sha }}"
         echo "Manifest URL: ${{ inputs.manifest-url }}"
         echo "Build number: ${{ inputs.build-number }}"
+        echo "AWS Role ARN: ${{ inputs.aws-role-arn }}"
+        echo "AWS Region: ${{ inputs.aws-region }}"
         echo ""
 
         python ${{ github.action_path }}/update_versions_file.py \
@@ -65,7 +83,8 @@ runs:
           --upstream-repo "${{ inputs.upstream-repo }}" \
           --upstream-sha "${{ inputs.upstream-sha }}" \
           --manifest-url "${{ inputs.manifest-url }}" \
-          --build-number "${{ inputs.build-number }}"
+          --build-number "${{ inputs.build-number }}" \
+          --aws-region "${{ inputs.aws-region }}"
 
 branding:
   icon: 'file-text'
