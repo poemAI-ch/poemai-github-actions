@@ -376,8 +376,11 @@ def validate(
             bot_ui_valid_keys = [
                 "bot_ui_bot_bubble_color",
                 "bot_ui_user_bubble_color",
+                "bot_ui_bot_bubble_text_color",
+                "bot_ui_user_bubble_text_color",
                 "bot_ui_conversation_area_background_color",
                 "bot_ui_conversation_area_text_color",
+                "bot_ui_link_color",
                 "bot_ui_font_size",
                 "bot_ui_use_api_links",
             ]
