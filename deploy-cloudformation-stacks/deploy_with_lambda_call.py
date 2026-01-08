@@ -283,6 +283,469 @@ def any_to_bool(value):
     return False  # Default to False for any other cases (None, empty string, etc.)
 
 
+def validate_sqs_lambda_timeout_compatibility(
+    template_content, parameters_to_use, stack_name, template_file
+):
+    """
+    Validate that Lambda functions with SQS event sources have timeout < SQS visibility timeout.
+
+    Args:
+        template_content: Parsed CloudFormation template
+        parameters_to_use: Resolved parameters for the template
+        stack_name: Name of the stack being validated
+        template_file: Path to the template file for error reporting
+    """
+    if not template_content.get("Resources"):
+        return
+
+    # Find Lambda functions and their timeouts
+    lambda_functions = {}
+    sqs_queues = {}
+
+    for resource_name, resource in template_content["Resources"].items():
+        resource_type = resource.get("Type", "")
+
+        # Collect Lambda functions and their timeouts
+        if resource_type in ["AWS::Lambda::Function", "AWS::Serverless::Function"]:
+            properties = resource.get("Properties", {})
+            timeout = properties.get(
+                "Timeout", 3
+            )  # Default Lambda timeout is 3 seconds
+
+            # Resolve timeout if it's a parameter reference
+            if isinstance(timeout, str) and timeout.startswith("!Ref "):
+                param_name = timeout[5:]  # Remove "!Ref "
+                if param_name in parameters_to_use:
+                    try:
+                        timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+            elif isinstance(timeout, dict) and "Ref" in timeout:
+                param_name = timeout["Ref"]
+                if param_name in parameters_to_use:
+                    try:
+                        timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+
+            lambda_functions[resource_name] = {
+                "timeout": timeout,
+                "events": properties.get("Events", {}),
+                "properties": properties,
+            }
+
+        # Collect SQS queues and their visibility timeouts
+        elif resource_type == "AWS::SQS::Queue":
+            properties = resource.get("Properties", {})
+            visibility_timeout = properties.get(
+                "VisibilityTimeout", 30
+            )  # Default SQS visibility timeout
+            queue_name_property = properties.get("QueueName")
+
+            # Resolve queue name if it's a parameter reference
+            queue_name = None
+            if isinstance(queue_name_property, str) and queue_name_property.startswith(
+                "!Ref "
+            ):
+                param_name = queue_name_property[5:]
+                if param_name in parameters_to_use:
+                    queue_name = parameters_to_use[param_name]
+            elif isinstance(queue_name_property, dict) and "Ref" in queue_name_property:
+                param_name = queue_name_property["Ref"]
+                if param_name in parameters_to_use:
+                    queue_name = parameters_to_use[param_name]
+            elif isinstance(queue_name_property, str):
+                queue_name = queue_name_property
+
+            # Resolve visibility timeout if it's a parameter reference
+            if isinstance(visibility_timeout, str) and visibility_timeout.startswith(
+                "!Ref "
+            ):
+                param_name = visibility_timeout[5:]
+                if param_name in parameters_to_use:
+                    try:
+                        visibility_timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve visibility timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+            elif isinstance(visibility_timeout, dict) and "Ref" in visibility_timeout:
+                param_name = visibility_timeout["Ref"]
+                if param_name in parameters_to_use:
+                    try:
+                        visibility_timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve visibility timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+
+            sqs_queues[resource_name] = {
+                "visibility_timeout": visibility_timeout,
+                "queue_name": queue_name,
+            }
+
+    # Check Lambda functions with SQS event sources
+    for lambda_name, lambda_info in lambda_functions.items():
+        lambda_timeout = lambda_info["timeout"]
+
+        # Check for SQS events in the Lambda function definition
+        for event_name, event_config in lambda_info["events"].items():
+            if event_config.get("Type") == "SQS":
+                # Try to find the referenced queue
+                queue_reference = event_config.get("Properties", {}).get("Queue", "")
+
+                # Look for queue reference patterns
+                queue_visibility_timeout = None
+
+                # Pattern: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${QueueName}"
+                if (
+                    isinstance(queue_reference, str)
+                    and "${" in queue_reference
+                    and "}" in queue_reference
+                ):
+                    # Extract queue name parameter from the !Sub reference
+                    import re
+
+                    queue_param_match = re.search(
+                        r"\$\{([^}]+)\}",
+                        (
+                            queue_reference.split(":")[-1]
+                            if ":" in queue_reference
+                            else queue_reference
+                        ),
+                    )
+                    if queue_param_match:
+                        queue_param_name = queue_param_match.group(1)
+                        if queue_param_name in parameters_to_use:
+                            # Look up the actual queue name in SQS queues by matching queue name
+                            queue_name = parameters_to_use[queue_param_name]
+                            for queue_resource_name, queue_info in sqs_queues.items():
+                                if queue_info["queue_name"] == queue_name:
+                                    queue_visibility_timeout = queue_info[
+                                        "visibility_timeout"
+                                    ]
+                                    break
+
+                # Pattern: direct queue reference
+                elif isinstance(queue_reference, dict):
+                    if "Ref" in queue_reference:
+                        queue_ref = queue_reference["Ref"]
+                        if queue_ref in sqs_queues:
+                            queue_visibility_timeout = sqs_queues[queue_ref][
+                                "visibility_timeout"
+                            ]
+                    elif "GetAtt" in queue_reference:
+                        # Handle !GetAtt references if needed
+                        continue
+
+                # If we found a queue visibility timeout, validate it
+                if queue_visibility_timeout is not None:
+                    if lambda_timeout >= queue_visibility_timeout:
+                        raise ValueError(
+                            f"❌ Lambda timeout validation failed in {stack_name} (template: {template_file}):\n"
+                            f"   Lambda function '{lambda_name}' has timeout {lambda_timeout}s\n"
+                            f"   SQS queue visibility timeout is {queue_visibility_timeout}s\n"
+                            f"   Lambda timeout must be less than SQS visibility timeout to prevent message reprocessing.\n"
+                            f"   Recommended: Set Lambda timeout to {queue_visibility_timeout - 10}s or increase SQS visibility timeout to {lambda_timeout + 60}s"
+                        )
+
+                    # Also warn if the buffer is too small (less than 10 seconds)
+                    buffer = queue_visibility_timeout - lambda_timeout
+                    if buffer < 10:
+                        _logger.warning(
+                            f"⚠️  Small timeout buffer in {stack_name}: Lambda '{lambda_name}' timeout {lambda_timeout}s, "
+                            f"SQS visibility timeout {queue_visibility_timeout}s (buffer: {buffer}s). "
+                            f"Consider increasing the buffer to at least 10 seconds."
+                        )
+
+
+def validate_cross_template_sqs_lambda_compatibility(
+    global_lambda_functions, global_sqs_queues
+):
+    """
+    Validate SQS/Lambda timeout compatibility across all templates.
+
+    Args:
+        global_lambda_functions: Dict of {function_name: {timeout, sqs_events, stack_name}}
+        global_sqs_queues: Dict of {queue_name: {visibility_timeout, stack_name}}
+    """
+    validation_errors = []
+    warnings = []
+
+    for function_name, lambda_info in global_lambda_functions.items():
+        lambda_timeout = lambda_info["timeout"]
+        lambda_stack = lambda_info["stack_name"]
+
+        for event_name, queue_name in lambda_info["sqs_events"].items():
+            if queue_name in global_sqs_queues:
+                queue_info = global_sqs_queues[queue_name]
+                queue_visibility_timeout = queue_info["visibility_timeout"]
+                queue_stack = queue_info["stack_name"]
+
+                if lambda_timeout >= queue_visibility_timeout:
+                    validation_errors.append(
+                        f"❌ SQS/Lambda timeout mismatch:\n"
+                        f"   Lambda function: '{function_name}' (stack: {lambda_stack})\n"
+                        f"   Lambda timeout: {lambda_timeout}s\n"
+                        f"   SQS queue: '{queue_name}' (stack: {queue_stack})\n"
+                        f"   SQS visibility timeout: {queue_visibility_timeout}s\n"
+                        f"   ⚠️  Lambda timeout must be less than SQS visibility timeout!\n"
+                        f"   💡 Fix: Set Lambda timeout to {queue_visibility_timeout - 10}s or increase SQS visibility timeout to {lambda_timeout + 60}s"
+                    )
+                else:
+                    # Check for small buffer (less than 10 seconds)
+                    buffer = queue_visibility_timeout - lambda_timeout
+                    if buffer < 10:
+                        warnings.append(
+                            f"⚠️  Small timeout buffer:\n"
+                            f"   Lambda: '{function_name}' ({lambda_timeout}s) -> SQS: '{queue_name}' ({queue_visibility_timeout}s)\n"
+                            f"   Buffer: {buffer}s (recommended: ≥10s)"
+                        )
+            else:
+                # Queue not found - might be external or referenced differently
+                _logger.debug(
+                    f"Queue '{queue_name}' referenced by Lambda '{function_name}' not found in processed templates"
+                )
+
+    # Report warnings
+    for warning in warnings:
+        _logger.warning(warning)
+
+    # Report errors and fail if any
+    if validation_errors:
+        error_message = "SQS/Lambda timeout validation failed:\n\n" + "\n\n".join(
+            validation_errors
+        )
+        raise ValueError(error_message)
+
+    if warnings:
+        _logger.info(
+            f"✅ SQS/Lambda timeout validation passed with {len(warnings)} warnings"
+        )
+    else:
+        _logger.info("✅ SQS/Lambda timeout validation passed")
+
+
+def collect_lambda_sqs_data(
+    template_content,
+    parameters_to_use,
+    stack_name,
+    global_lambda_functions,
+    global_sqs_queues,
+):
+    """
+    Collect Lambda function and SQS queue data for cross-template validation.
+
+    Args:
+        template_content: Parsed CloudFormation template
+        parameters_to_use: Resolved parameters for the template
+        stack_name: Name of the stack being processed
+        global_lambda_functions: Global dict to store Lambda function data
+        global_sqs_queues: Global dict to store SQS queue data
+    """
+    if not template_content.get("Resources"):
+        return
+
+    for resource_name, resource in template_content["Resources"].items():
+        resource_type = resource.get("Type", "")
+
+        # Collect Lambda functions and their timeouts/events
+        if resource_type in ["AWS::Lambda::Function", "AWS::Serverless::Function"]:
+            properties = resource.get("Properties", {})
+            timeout = properties.get(
+                "Timeout", 3
+            )  # Default Lambda timeout is 3 seconds
+            function_name = properties.get("FunctionName", resource_name)
+
+            # Resolve timeout if it's a parameter reference
+            if isinstance(timeout, str) and timeout.startswith("!Ref "):
+                param_name = timeout[5:]  # Remove "!Ref "
+                if param_name in parameters_to_use:
+                    try:
+                        timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+            elif isinstance(timeout, dict) and "Ref" in timeout:
+                param_name = timeout["Ref"]
+                if param_name in parameters_to_use:
+                    try:
+                        timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+
+            # Resolve function name if it's a reference
+            resolved_function_name = function_name
+            if isinstance(function_name, str) and function_name.startswith("!Sub "):
+                # Simple substitution for ${Environment} pattern
+                if "${Environment}" in function_name:
+                    env = parameters_to_use.get("Environment", "")
+                    resolved_function_name = function_name.replace("!Sub ", "").replace(
+                        "${Environment}", env
+                    )
+            elif isinstance(function_name, dict) and "Sub" in function_name:
+                # Handle !Sub as dict
+                sub_template = function_name["Sub"]
+                if "${Environment}" in sub_template:
+                    env = parameters_to_use.get("Environment", "")
+                    resolved_function_name = sub_template.replace("${Environment}", env)
+
+            # Collect SQS events from this Lambda
+            events = properties.get("Events", {})
+            sqs_events = {}
+            for event_name, event_config in events.items():
+                if event_config.get("Type") == "SQS":
+                    queue_reference = event_config.get("Properties", {}).get(
+                        "Queue", ""
+                    )
+
+                    # Extract queue name from various reference patterns
+                    queue_name = None
+                    if (
+                        isinstance(queue_reference, str)
+                        and "${" in queue_reference
+                        and "}" in queue_reference
+                    ):
+                        # Pattern: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${QueueName}"
+                        import re
+
+                        queue_param_match = re.search(
+                            r"\$\{([^}]+)\}",
+                            (
+                                queue_reference.split(":")[-1]
+                                if ":" in queue_reference
+                                else queue_reference
+                            ),
+                        )
+                        if queue_param_match:
+                            queue_param_name = queue_param_match.group(1)
+                            if queue_param_name in parameters_to_use:
+                                queue_name = parameters_to_use[queue_param_name]
+                                _logger.debug(
+                                    f"Resolved Lambda SQS event queue {queue_param_name} -> {queue_name}"
+                                )
+                    elif isinstance(queue_reference, dict) and "Sub" in queue_reference:
+                        # Handle !Sub as dict
+                        sub_template = queue_reference["Sub"]
+                        if "${" in sub_template and "}" in sub_template:
+                            import re
+
+                            queue_param_match = re.search(
+                                r"\$\{([^}]+)\}",
+                                (
+                                    sub_template.split(":")[-1]
+                                    if ":" in sub_template
+                                    else sub_template
+                                ),
+                            )
+                            if queue_param_match:
+                                queue_param_name = queue_param_match.group(1)
+                                if queue_param_name in parameters_to_use:
+                                    queue_name = parameters_to_use[queue_param_name]
+                                    _logger.debug(
+                                        f"Resolved Lambda SQS event queue {queue_param_name} -> {queue_name}"
+                                    )
+
+                    if queue_name:
+                        sqs_events[event_name] = queue_name
+                    else:
+                        _logger.debug(
+                            f"Could not resolve queue name from reference: {queue_reference}"
+                        )
+
+            global_lambda_functions[resolved_function_name] = {
+                "timeout": timeout,
+                "sqs_events": sqs_events,
+                "stack_name": stack_name,
+                "resource_name": resource_name,
+            }
+
+        # Collect SQS queues and their visibility timeouts
+        elif resource_type == "AWS::SQS::Queue":
+            properties = resource.get("Properties", {})
+            visibility_timeout = properties.get(
+                "VisibilityTimeout", 30
+            )  # Default SQS visibility timeout
+            queue_name_property = properties.get("QueueName")
+
+            _logger.debug(
+                f"Processing SQS queue {resource_name}: QueueName property = {queue_name_property}"
+            )
+
+            # Resolve queue name if it's a parameter reference
+            queue_name = None
+            if isinstance(queue_name_property, str) and queue_name_property.startswith(
+                "!Ref "
+            ):
+                param_name = queue_name_property[5:]
+                if param_name in parameters_to_use:
+                    queue_name = parameters_to_use[param_name]
+                    _logger.debug(
+                        f"Resolved SQS queue name {param_name} -> {queue_name}"
+                    )
+            elif isinstance(queue_name_property, dict) and "Ref" in queue_name_property:
+                param_name = queue_name_property["Ref"]
+                if param_name in parameters_to_use:
+                    queue_name = parameters_to_use[param_name]
+                    _logger.debug(
+                        f"Resolved SQS queue name {param_name} -> {queue_name}"
+                    )
+            elif isinstance(queue_name_property, str):
+                queue_name = queue_name_property
+                _logger.debug(f"Using literal SQS queue name: {queue_name}")
+            elif queue_name_property is None:
+                # No explicit QueueName, use resource name (default behavior)
+                queue_name = resource_name
+                _logger.debug(f"Using resource name as SQS queue name: {queue_name}")
+
+            # Resolve visibility timeout if it's a parameter reference
+            if isinstance(visibility_timeout, str) and visibility_timeout.startswith(
+                "!Ref "
+            ):
+                param_name = visibility_timeout[5:]
+                if param_name in parameters_to_use:
+                    try:
+                        visibility_timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve visibility timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+            elif isinstance(visibility_timeout, dict) and "Ref" in visibility_timeout:
+                param_name = visibility_timeout["Ref"]
+                if param_name in parameters_to_use:
+                    try:
+                        visibility_timeout = int(parameters_to_use[param_name])
+                    except (ValueError, TypeError):
+                        _logger.warning(
+                            f"Could not resolve visibility timeout parameter {param_name} for {resource_name}"
+                        )
+                        continue
+
+            if queue_name:
+                _logger.debug(
+                    f"Collected SQS queue: {queue_name} with visibility timeout {visibility_timeout}s in stack {stack_name}"
+                )
+                global_sqs_queues[queue_name] = {
+                    "visibility_timeout": visibility_timeout,
+                    "stack_name": stack_name,
+                    "resource_name": resource_name,
+                }
+
+
 def create_message(
     stack,
     globals,
@@ -290,6 +753,8 @@ def create_message(
     environment,
     repo_versions,
     referenced_globals,
+    global_lambda_functions,
+    global_sqs_queues,
 ):
 
     template_file_name = stack.get("template_file")
@@ -429,6 +894,15 @@ def create_message(
                 f"Parameter {key} for {stack_name} loaded from {template_file} is not a string, but {type(value)} : {value}"
             )
 
+    # Collect Lambda and SQS data for cross-template validation
+    collect_lambda_sqs_data(
+        template_content,
+        parameters_to_use,
+        stack_name,
+        global_lambda_functions,
+        global_sqs_queues,
+    )
+
     template_content_hash = sha256(template_body.encode()).hexdigest()
 
     # Construct the message
@@ -438,6 +912,11 @@ def create_message(
         "parameters": parameters_to_use,
         "template_content_hash": template_content_hash,
     }
+
+    if stack.get("region"):
+        region = stack["region"]
+        _logger.info(f"Stack {stack_name} will be deployed to region: {region}")
+        message["region"] = region
 
     return message
 
@@ -497,6 +976,12 @@ def prepare_messages(config, config_file):
             repo_versions = yaml.safe_load(f).get("versions", {})
 
     referenced_globals = set([POEMAI_TIMESTAMP_KEY])  # Track referenced globals
+
+    # Global collections for cross-template validation
+    global_lambda_functions = (
+        {}
+    )  # {function_name: {timeout: int, events: {event_name: queue_name}, stack_name: str}}
+    global_sqs_queues = {}  # {queue_name: {visibility_timeout: int, stack_name: str}}
 
     config_global_environment = None
     if "environment" in config:
@@ -591,6 +1076,8 @@ def prepare_messages(config, config_file):
             config_global_environment,
             repo_versions,
             referenced_globals,
+            global_lambda_functions,
+            global_sqs_queues,
         )
         if message:
             retval.append(
@@ -663,6 +1150,25 @@ def prepare_messages(config, config_file):
             f"Generation {i}: {', '.join([m['message']['stack_name'] for m in messages])}"
         )
 
+    # Debug: Print collected data before validation
+    _logger.info(f"Debug: Collected {len(global_lambda_functions)} Lambda functions")
+    for func_name, func_info in global_lambda_functions.items():
+        if func_info["sqs_events"]:
+            _logger.info(
+                f"  Lambda {func_name}: timeout={func_info['timeout']}s, SQS events: {func_info['sqs_events']}"
+            )
+
+    _logger.info(f"Debug: Collected {len(global_sqs_queues)} SQS queues")
+    for queue_name, queue_info in global_sqs_queues.items():
+        _logger.info(
+            f"  SQS {queue_name}: visibility_timeout={queue_info['visibility_timeout']}s"
+        )
+
+    # Validate SQS/Lambda timeout compatibility across all templates
+    validate_cross_template_sqs_lambda_compatibility(
+        global_lambda_functions, global_sqs_queues
+    )
+
     log_template_file_sources(config_global_environment)
 
     return sorted_messages_by_generation, dependency_graph
@@ -713,10 +1219,13 @@ def invoke_lambda_with_backoff(
             raise
 
 
-def wait_for_stack_stable_state(stack_name):
-    _logger.info(f"Waiting for stack {stack_name} to reach stable state")
+def wait_for_stack_stable_state(stack_name, region=None):
+    region_to_use = region or "eu-central-2"
+    _logger.info(
+        f"Waiting for stack {stack_name} to reach stable state in {region_to_use}"
+    )
 
-    cf_client = boto3.client("cloudformation", region_name="eu-central-2")
+    cf_client = boto3.client("cloudformation", region_name=region_to_use)
 
     num_retries = 30
     stack_status = None
@@ -755,17 +1264,19 @@ def wait_for_stack_stable_state(stack_name):
 def deploy_stack(lambda_client, lambda_function_name, message_spec):
 
     stack_name = message_spec["message"]["stack_name"]
+    region = message_spec["message"].get("region")
 
     try:
         lambda_event = {"Records": [{"body": json.dumps(message_spec["message"])}]}
         _logger.info(
             f"({message_spec['message_nr']+1:>4}/{message_spec['total_messages']} stack {stack_name} : Invoking lambda {lambda_function_name}"
+            + (f" (region: {region})" if region else "")
         )
         retval = invoke_lambda_with_backoff(
             lambda_client, lambda_function_name, lambda_event, info=stack_name
         )
 
-        state = wait_for_stack_stable_state(stack_name)
+        state = wait_for_stack_stable_state(stack_name, region)
 
         _logger.info(f"Stack {stack_name} reached stable state {state}")
 

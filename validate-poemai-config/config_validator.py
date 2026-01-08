@@ -356,6 +356,88 @@ def validate(
                     "error": f"corpus_key {obj['corpus_key']} does not match corpus_key in pk {fields['corpus_key']}",
                 }
             )
+
+        # Validate search configuration parameters
+        search_config_params = {
+            "k_for_top_k_search": {"min": 1, "max": 100, "type": int},
+            "num_matches_in_prompt": {"min": 1, "max": 50, "type": int},
+            "num_matches_to_display": {"min": 1, "max": 50, "type": int},
+            "max_hits_per_document": {"min": 1, "max": 20, "type": int},
+        }
+
+        for param_name, config in search_config_params.items():
+            if param_name in obj:
+                param_value = obj[param_name]
+
+                # Check type (should be int, but could be string in YAML)
+                if not isinstance(param_value, (int, str)):
+                    validation_errors[filename].append(
+                        {
+                            "error": f"{param_name} must be an integer, got {type(param_value).__name__}: {param_value}",
+                        }
+                    )
+                    continue
+
+                # Convert string to int if needed
+                try:
+                    if isinstance(param_value, str):
+                        param_value = int(param_value)
+                except ValueError:
+                    validation_errors[filename].append(
+                        {
+                            "error": f"{param_name} must be a valid integer, got: {obj[param_name]}",
+                        }
+                    )
+                    continue
+
+                # Check range
+                if param_value < config["min"] or param_value > config["max"]:
+                    validation_errors[filename].append(
+                        {
+                            "error": f"{param_name} must be between {config['min']} and {config['max']}, got: {param_value}",
+                        }
+                    )
+
+        # Validate logical relationships between search parameters
+        k_for_search = obj.get("k_for_top_k_search")
+        num_matches_display = obj.get("num_matches_to_display")
+        num_matches_prompt = obj.get("num_matches_in_prompt")
+
+        # Convert strings to ints for comparison
+        try:
+            if k_for_search is not None and isinstance(k_for_search, str):
+                k_for_search = int(k_for_search)
+            if num_matches_display is not None and isinstance(num_matches_display, str):
+                num_matches_display = int(num_matches_display)
+            if num_matches_prompt is not None and isinstance(num_matches_prompt, str):
+                num_matches_prompt = int(num_matches_prompt)
+        except ValueError:
+            # If conversion fails, skip logical validation (type errors already reported above)
+            pass
+        else:
+            # Check logical relationships if all values are valid
+            if (
+                num_matches_prompt is not None
+                and num_matches_display is not None
+                and num_matches_prompt > num_matches_display
+            ):
+                validation_errors[filename].append(
+                    {
+                        "error": f"num_matches_in_prompt ({num_matches_prompt}) should not be greater than num_matches_to_display ({num_matches_display})",
+                    }
+                )
+
+            if (
+                k_for_search is not None
+                and num_matches_display is not None
+                and k_for_search < num_matches_display
+            ):
+                validation_errors[filename].append(
+                    {
+                        "error": f"k_for_top_k_search ({k_for_search}) should be greater than or equal to num_matches_to_display ({num_matches_display})",
+                    }
+                )
+
         ui_settings = obj.get("ui_settings")
         if ui_settings is not None:
             case_manager_ui_settings = ui_settings.get("case_manager")
