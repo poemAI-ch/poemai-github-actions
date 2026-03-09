@@ -1,35 +1,103 @@
-import os
-
-# Add the parent directory to the path so we can import our module
-import sys
-import tempfile
+from collections import defaultdict
+from enum import Enum
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
-import yaml
+import sys
+import types
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+if "jsonschema" not in sys.modules:
+    sys.modules["jsonschema"] = types.SimpleNamespace(
+        validate=lambda *args, **kwargs: None
+    )
+if "poemai_utils" not in sys.modules:
+    poemai_utils = types.ModuleType("poemai_utils")
+    enum_utils = types.ModuleType("poemai_utils.enum_utils")
+    enum_utils.add_enum_repr = lambda enum_cls: enum_cls
+    openai_module = types.ModuleType("poemai_utils.openai")
+    openai_model_module = types.ModuleType("poemai_utils.openai.openai_model")
+
+    class _OpenAIModel(Enum):
+        GPT_4_1 = "gpt-4.1"
+        GPT_5_MINI = "gpt-5-mini"
+
+    openai_model_module.OPENAI_MODEL = _OpenAIModel
+
+    sys.modules["poemai_utils"] = poemai_utils
+    sys.modules["poemai_utils.enum_utils"] = enum_utils
+    sys.modules["poemai_utils.openai"] = openai_module
+    sys.modules["poemai_utils.openai.openai_model"] = openai_model_module
+
+from config_validator import calc_object_directory
+from config_validator import validate
 
 
-from validate_poemai_config.config_validator import validate_config
-
-
-def test_valid_config():
-    valid_config = {
-        "model": "gpt-4",
-        "temperature": 0.7,
-        "max_tokens": 1500,
-        "system_prompt": "You are a helpful assistant.",
+def _assistant_object(model_name):
+    return {
+        "pk": "CORPUS_KEY#POEMAI_TEST_BOT#ASSISTANT#",
+        "sk": "ASSISTANT_ID#0123456789abcdef0123456789abcdef",
+        "corpus_key": "POEMAI_TEST_BOT",
+        "assistant_id": "0123456789abcdef0123456789abcdef",
+        "assistant_key": "rag_assistent",
+        "assistant_model_name": model_name,
     }
 
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmpfile:
-        yaml.dump(valid_config, tmpfile)
-        tmpfile_path = tmpfile.name
 
-    try:
-        is_valid, errors = validate_config(tmpfile_path)
-        assert is_valid
-        assert errors == []
-    finally:
-        os.remove(tmpfile_path)
+def _corpus_metadata_object(openai_base_url=None):
+    obj = {
+        "pk": "CORPUS_METADATA#",
+        "sk": "CORPUS_KEY#POEMAI_TEST_BOT",
+        "corpus_key": "POEMAI_TEST_BOT",
+        "openai_project_account_name": "test-account",
+        "summarizer_model_name": "GPT_4_1",
+    }
+    if openai_base_url is not None:
+        obj["openai_base_url"] = openai_base_url
+    return obj
+
+
+def _run_assistant_validation(assistant_obj, corpus_metadata_obj):
+    validation_errors = defaultdict(list)
+    uuid_collection = defaultdict(list)
+    assistant_case_manager_graph = {
+        "object_by_id": {},
+        "edges": {},
+        "objects_by_key": calc_object_directory(
+            [
+                (assistant_obj, "assistant.yaml"),
+                (corpus_metadata_obj, "corpus_metadata.yaml"),
+            ]
+        ),
+    }
+
+    validate(
+        obj=assistant_obj,
+        filename="assistant.yaml",
+        keys_by_corpus_key=defaultdict(lambda: defaultdict(lambda: set())),
+        legal_corpus_keys={"POEMAI_TEST_BOT"},
+        validation_errors=validation_errors,
+        uuid_collection=uuid_collection,
+        assistant_case_manager_graph=assistant_case_manager_graph,
+    )
+    return validation_errors
+
+
+def test_assistant_model_name_allows_non_openai_name_with_custom_api_url():
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object("mistral-large-latest"),
+        corpus_metadata_obj=_corpus_metadata_object(
+            openai_base_url="https://api.mistral.ai/v1/chat/completions"
+        ),
+    )
+    assert "assistant.yaml" not in errors
+
+
+def test_assistant_model_name_rejects_non_openai_name_without_custom_api_url():
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object("mistral-large-latest"),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" in errors
+    assert any(
+        "not a valid OpenAI model" in error["error"]
+        for error in errors["assistant.yaml"]
+    )
