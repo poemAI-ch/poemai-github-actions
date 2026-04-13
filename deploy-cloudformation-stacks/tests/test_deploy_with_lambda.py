@@ -228,6 +228,115 @@ def test_resolve_version_with_hash_support():
     assert result is None
 
 
+def test_deploy_uses_cloudfront_specific_stable_state_timeout(tmpdir):
+    from deploy_with_lambda_call import (
+        DEFAULT_CLOUDFRONT_STACK_STABLE_STATE_TIMEOUT_SECONDS,
+    )
+
+    tempdir = Path(tmpdir)
+    environment = "devops"
+    envdir = tempdir / environment
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    stacks = {
+        "environment": environment,
+        "stacks": [{"stack_name": "test-cloudfront-stack"}],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    stack_template = {
+        "Resources": {
+            "Distribution": {"Type": "AWS::CloudFront::Distribution", "Properties": {}}
+        }
+    }
+    stack_template_file = envdir / "test_cloudfront_stack.yaml"
+    with open(stack_template_file, "w") as f:
+        yaml.dump(stack_template, f)
+
+    with patch("deploy_with_lambda_call.boto3") as boto3_mock, patch(
+        "deploy_with_lambda_call.wait_for_stack_stable_state"
+    ) as mock_wait:
+        lambda_client_mock = MagicMock()
+        boto3_mock.client.return_value = lambda_client_mock
+
+        lambda_client_mock.exceptions = MagicMock()
+
+        class TooManyRequestsException(Exception):
+            pass
+
+        lambda_client_mock.exceptions.TooManyRequestsException = (
+            TooManyRequestsException
+        )
+
+        payload_mock = MagicMock()
+        payload_mock.read.return_value = b'[{"status": "success"}]'
+        lambda_client_mock.invoke.return_value = {"Payload": payload_mock}
+        mock_wait.return_value = "UPDATE_COMPLETE"
+
+        config = yaml.safe_load(open(stacks_file))
+        deploy("test-lambda", config, stacks_file.as_posix())
+
+        assert mock_wait.call_args.kwargs["timeout_seconds"] == (
+            DEFAULT_CLOUDFRONT_STACK_STABLE_STATE_TIMEOUT_SECONDS
+        )
+
+
+def test_deploy_uses_explicit_stable_state_timeout_override(tmpdir):
+    tempdir = Path(tmpdir)
+    environment = "devops"
+    envdir = tempdir / environment
+    envdir.mkdir(parents=True, exist_ok=True)
+
+    stacks = {
+        "environment": environment,
+        "stacks": [
+            {
+                "stack_name": "test-stack",
+                "stable_state_timeout_seconds": 420,
+            }
+        ],
+    }
+    stacks_file = envdir / "stacks.yaml"
+    with open(stacks_file, "w") as f:
+        yaml.dump(stacks, f)
+
+    stack_template = {
+        "Resources": {
+            "Bucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "x"}}
+        }
+    }
+    stack_template_file = envdir / "test_stack.yaml"
+    with open(stack_template_file, "w") as f:
+        yaml.dump(stack_template, f)
+
+    with patch("deploy_with_lambda_call.boto3") as boto3_mock, patch(
+        "deploy_with_lambda_call.wait_for_stack_stable_state"
+    ) as mock_wait:
+        lambda_client_mock = MagicMock()
+        boto3_mock.client.return_value = lambda_client_mock
+
+        lambda_client_mock.exceptions = MagicMock()
+
+        class TooManyRequestsException(Exception):
+            pass
+
+        lambda_client_mock.exceptions.TooManyRequestsException = (
+            TooManyRequestsException
+        )
+
+        payload_mock = MagicMock()
+        payload_mock.read.return_value = b'[{"status": "success"}]'
+        lambda_client_mock.invoke.return_value = {"Payload": payload_mock}
+        mock_wait.return_value = "CREATE_COMPLETE"
+
+        config = yaml.safe_load(open(stacks_file))
+        deploy("test-lambda", config, stacks_file.as_posix())
+
+        assert mock_wait.call_args.kwargs["timeout_seconds"] == 420
+
+
 def test_compare_stack_names():
     """Test the stack name comparison function."""
     from deploy_with_lambda_call import compare_stack_names

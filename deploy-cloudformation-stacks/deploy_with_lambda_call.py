@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -22,6 +23,9 @@ _logger = logging.getLogger(__name__)
 ENVIRONMENT_PRIORITY = ["development", "staging", "production", "devops"]
 
 POEMAI_TIMESTAMP_KEY = "__poemai_timestamp__"
+STACK_STABLE_STATE_POLL_INTERVAL_SECONDS = 10
+DEFAULT_STACK_STABLE_STATE_TIMEOUT_SECONDS = 300
+DEFAULT_CLOUDFRONT_STACK_STABLE_STATE_TIMEOUT_SECONDS = 1800
 for tag in ["!Ref", "!GetAtt", "!Sub", "!GetAZs"]:
     yaml.SafeLoader.add_constructor(
         tag, lambda loader, node: f"{tag[1:]}({loader.construct_scalar(node)})"
@@ -756,6 +760,7 @@ def create_message(
     global_lambda_functions,
     global_sqs_queues,
 ):
+    contains_cloudfront_distribution = False
 
     template_file_name = stack.get("template_file")
     if not template_file_name:
@@ -789,6 +794,13 @@ def create_message(
             f"Template file {template_file} does not contain a valid CloudFormation template structure. "
             f"Expected a YAML dictionary but got {type(template_content)}."
         )
+
+    resources = template_content.get("Resources", {})
+    contains_cloudfront_distribution = any(
+        isinstance(resource, dict)
+        and resource.get("Type") == "AWS::CloudFront::Distribution"
+        for resource in resources.values()
+    )
 
     parameter_names_in_template = set(template_content.get("Parameters", {}).keys())
 
@@ -918,7 +930,7 @@ def create_message(
         _logger.info(f"Stack {stack_name} will be deployed to region: {region}")
         message["region"] = region
 
-    return message
+    return message, contains_cloudfront_distribution
 
 
 def resolve_version_with_hash_support(repo, repo_versions, key_name):
@@ -1069,7 +1081,7 @@ def prepare_messages(config, config_file):
         if not template_file_name:
             template_file_name = calc_template_file_name(stack["stack_name"])
 
-        message = create_message(
+        message_result = create_message(
             stack,
             globals,
             config_file_dir,
@@ -1079,12 +1091,16 @@ def prepare_messages(config, config_file):
             global_lambda_functions,
             global_sqs_queues,
         )
-        if message:
+        if message_result:
+            message, contains_cloudfront_distribution = message_result
             retval.append(
                 {
                     "message": message,
                     "stack": stack,
                     "template_file": template_file_name,
+                    "contains_cloudfront_distribution": (
+                        contains_cloudfront_distribution
+                    ),
                 }
             )
 
@@ -1219,15 +1235,47 @@ def invoke_lambda_with_backoff(
             raise
 
 
-def wait_for_stack_stable_state(stack_name, region=None):
+def determine_stack_stable_state_timeout_seconds(message_spec):
+    stack = message_spec.get("stack", {})
+    stack_name = message_spec["message"]["stack_name"]
+
+    explicit_timeout = stack.get("stable_state_timeout_seconds")
+    if explicit_timeout is not None:
+        try:
+            timeout_seconds = int(explicit_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid stable_state_timeout_seconds for {stack_name}: {explicit_timeout}"
+            ) from exc
+
+        if timeout_seconds <= 0:
+            raise ValueError(
+                f"stable_state_timeout_seconds for {stack_name} must be > 0"
+            )
+
+        return timeout_seconds
+
+    if message_spec.get("contains_cloudfront_distribution"):
+        return DEFAULT_CLOUDFRONT_STACK_STABLE_STATE_TIMEOUT_SECONDS
+
+    return DEFAULT_STACK_STABLE_STATE_TIMEOUT_SECONDS
+
+
+def wait_for_stack_stable_state(
+    stack_name,
+    region=None,
+    timeout_seconds=DEFAULT_STACK_STABLE_STATE_TIMEOUT_SECONDS,
+    poll_interval_seconds=STACK_STABLE_STATE_POLL_INTERVAL_SECONDS,
+):
     region_to_use = region or "eu-central-2"
     _logger.info(
-        f"Waiting for stack {stack_name} to reach stable state in {region_to_use}"
+        f"Waiting for stack {stack_name} to reach stable state in {region_to_use} "
+        f"(timeout={timeout_seconds}s, poll_interval={poll_interval_seconds}s)"
     )
 
     cf_client = boto3.client("cloudformation", region_name=region_to_use)
 
-    num_retries = 30
+    num_retries = max(1, math.ceil(timeout_seconds / poll_interval_seconds))
     stack_status = None
     for _ in range(num_retries):
         try:
@@ -1250,7 +1298,7 @@ def wait_for_stack_stable_state(stack_name, region=None):
             _logger.info(
                 f"Stack status of {stack_name} is still in {stack_data['Stacks'][0]['StackStatus']}, waiting...."
             )
-            time.sleep(10)
+            time.sleep(poll_interval_seconds)
         except Exception as e:
             _logger.error(
                 f"An error occurred for stack {stack_name} {str(e)}", exc_info=True
@@ -1265,6 +1313,9 @@ def deploy_stack(lambda_client, lambda_function_name, message_spec):
 
     stack_name = message_spec["message"]["stack_name"]
     region = message_spec["message"].get("region")
+    stable_state_timeout_seconds = determine_stack_stable_state_timeout_seconds(
+        message_spec
+    )
 
     try:
         lambda_event = {"Records": [{"body": json.dumps(message_spec["message"])}]}
@@ -1276,7 +1327,11 @@ def deploy_stack(lambda_client, lambda_function_name, message_spec):
             lambda_client, lambda_function_name, lambda_event, info=stack_name
         )
 
-        state = wait_for_stack_stable_state(stack_name, region)
+        state = wait_for_stack_stable_state(
+            stack_name,
+            region,
+            timeout_seconds=stable_state_timeout_seconds,
+        )
 
         _logger.info(f"Stack {stack_name} reached stable state {state}")
 

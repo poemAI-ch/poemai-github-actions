@@ -242,9 +242,9 @@ def validate(
                 ObjectType.CORPUS_METADATA,
                 corpus_key,
             )
-            corpus_metadata_record = assistant_case_manager_graph[
-                "objects_by_key"
-            ].get(corpus_metadata_key, {})
+            corpus_metadata_record = assistant_case_manager_graph["objects_by_key"].get(
+                corpus_metadata_key, {}
+            )
             corpus_metadata = corpus_metadata_record.get("object", {})
             has_custom_api_url = bool(
                 (corpus_metadata.get("openai_base_url") or "").strip()
@@ -254,10 +254,7 @@ def validate(
             # Check if it's a valid OPENAI_MODEL enum value when no custom API URL is configured
             valid_model_names = [model.name for model in OPENAI_MODEL]
 
-            if (
-                assistant_model_name not in valid_model_names
-                and not has_custom_api_url
-            ):
+            if assistant_model_name not in valid_model_names and not has_custom_api_url:
                 validation_errors[filename].append(
                     {
                         "error": f"assistant_model_name '{assistant_model_name}' is not a valid OpenAI model. Valid models: {', '.join(valid_model_names)}",

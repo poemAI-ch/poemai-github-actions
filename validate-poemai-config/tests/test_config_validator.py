@@ -1,8 +1,8 @@
+import sys
+import types
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
-import sys
-import types
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 if "jsonschema" not in sys.modules:
@@ -27,8 +27,7 @@ if "poemai_utils" not in sys.modules:
     sys.modules["poemai_utils.openai"] = openai_module
     sys.modules["poemai_utils.openai.openai_model"] = openai_model_module
 
-from config_validator import calc_object_directory
-from config_validator import validate
+from config_validator import calc_object_directory, validate
 
 
 def _assistant_object(model_name):
