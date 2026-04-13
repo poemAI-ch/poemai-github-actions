@@ -3,12 +3,14 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import botocore.exceptions
 import pytest
 import yaml
 from deploy_with_lambda_call import (
     deploy,
     do_dump,
     do_dump_graph,
+    invoke_lambda_with_backoff,
     resolve_version_with_hash_support,
 )
 
@@ -141,6 +143,44 @@ def test_deploy_2(tmpdir):
 
         config = yaml.safe_load(open(stacks_file))
         do_dump_graph(config, stacks_file.as_posix())
+
+
+def test_invoke_lambda_with_backoff_retries_read_timeout():
+    lambda_client_mock = MagicMock()
+    lambda_client_mock.exceptions = MagicMock()
+
+    class TooManyRequestsException(Exception):
+        pass
+
+    lambda_client_mock.exceptions.TooManyRequestsException = TooManyRequestsException
+
+    payload_content = '[{"status": "success"}]'
+    payload_mock = MagicMock()
+    payload_mock.read.return_value = payload_content.encode("utf-8")
+
+    lambda_client_mock.invoke.side_effect = [
+        botocore.exceptions.ReadTimeoutError(
+            endpoint_url="https://lambda.eu-central-2.amazonaws.com/test",
+            error="timed out",
+        ),
+        {"Payload": payload_mock},
+    ]
+
+    with patch("deploy_with_lambda_call.time.sleep") as sleep_mock, patch(
+        "deploy_with_lambda_call.random.uniform", return_value=0
+    ):
+        response = invoke_lambda_with_backoff(
+            lambda_client_mock,
+            "test-function",
+            {"hello": "world"},
+            max_attempts=3,
+            initial_delay=1,
+            info="test-stack",
+        )
+
+    assert response["Payload"] == [{"status": "success"}]
+    assert lambda_client_mock.invoke.call_count == 2
+    sleep_mock.assert_called_once_with(1)
 
 
 def test_resolve_version_with_hash_support():

@@ -15,6 +15,7 @@ from pathlib import Path
 from string import Template
 
 import boto3
+import botocore.exceptions
 import networkx as nx
 import yaml
 
@@ -1218,16 +1219,20 @@ def invoke_lambda_with_backoff(
                 response_payload  # Replace the StreamingBody with the actual content
             )
             return response
-        except lambda_client.exceptions.TooManyRequestsException:
+        except (
+            lambda_client.exceptions.TooManyRequestsException,
+            botocore.exceptions.ReadTimeoutError,
+        ) as e:
             if attempt < max_attempts - 1:
                 sleep_time = initial_delay * (2**attempt) + random.uniform(0, 1)
                 time.sleep(sleep_time)
+                error_text = str(e)
                 _logger.info(
-                    f"Rate exceeded. {info_text} retrying after {sleep_time:.2f} seconds..."
+                    f"Transient invoke error{info_text}{error_text} retrying after {sleep_time:.2f} seconds..."
                 )
             else:
                 _logger.error(
-                    "Max retry attempts reached. {info_text}unable to invoke lambda function."
+                    f"Max retry attempts reached.{info_text} unable to invoke lambda function."
                 )
                 raise  # Re-raise the exception after the last attempt
         except Exception as e:
