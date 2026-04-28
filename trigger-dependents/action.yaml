@@ -44,7 +44,7 @@ runs:
         echo "EOF" >> $GITHUB_ENV
 
     - name: Trigger downstreams via Lambda
-      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v2
+      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v5.7.3
       with:
         function-name: ${{ inputs.function-name }}
         region: ${{ inputs.region }}

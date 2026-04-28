@@ -18,7 +18,7 @@ The `deploy-poemai-config` acti## Key Features
 
 ```yaml
 - name: Deploy temporary bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.1.1
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.7.3
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -32,7 +32,7 @@ The `deploy-poemai-config` acti## Key Features
 
 ```yaml
 - name: Deploy PR test bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.1.1
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.7.3
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -46,7 +46,7 @@ The `deploy-poemai-config` acti## Key Features
 
 ```yaml
 - name: Deploy RIGHTNOW_BOT temporary instance
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.1.1
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.7.3
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-staging-wildcard-rightnow-lambda'

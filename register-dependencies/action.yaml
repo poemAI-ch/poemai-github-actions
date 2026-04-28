@@ -16,7 +16,7 @@ runs:
   using: "composite"
   steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Prepare dependencies JSON payload
       shell: bash
@@ -48,7 +48,7 @@ runs:
 
     - name: Register in S3 via Lambda
       id: register
-      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v3.3.0
+      uses: poemAI-ch/poemai-github-actions/invoke-lambda@v5.7.3
       with:
         function-name: ${{ inputs.function-name }}
         region: ${{ inputs.region }}

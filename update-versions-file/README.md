@@ -15,7 +15,7 @@ A GitHub Action that updates upstream versions files for both hash-based and reg
 
 ```yaml
 - name: Update versions for regular build
-  uses: poemAI-ch/poemai-github-actions/update-versions-file@v2
+  uses: poemAI-ch/poemai-github-actions/update-versions-file@v5.7.3
   with:
     versions-file-path: '.poemai-upstream-versions.yaml'
     upstream-repo: 'poemAI-ch/upstream-repo'
@@ -26,7 +26,7 @@ A GitHub Action that updates upstream versions files for both hash-based and reg
 
 ```yaml
 - name: Update versions for hash-based build
-  uses: poemAI-ch/poemai-github-actions/update-versions-file@v2
+  uses: poemAI-ch/poemai-github-actions/update-versions-file@v5.7.3
   with:
     versions-file-path: '.poemai-upstream-versions.yaml'
     upstream-repo: 'poemAI-ch/upstream-lambdas'
@@ -38,7 +38,7 @@ A GitHub Action that updates upstream versions files for both hash-based and reg
 
 ```yaml
 - name: Update versions (auto-detect build type)
-  uses: poemAI-ch/poemai-github-actions/update-versions-file@v2
+  uses: poemAI-ch/poemai-github-actions/update-versions-file@v5.7.3
   with:
     versions-file-path: '.poemai-upstream-versions.yaml'
     upstream-repo: '${{ github.event.client_payload.upstream }}'
