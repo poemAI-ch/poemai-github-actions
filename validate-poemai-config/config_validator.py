@@ -134,6 +134,51 @@ def is_valid_hex_uuid(uuid):
     return True
 
 
+def is_non_empty_string(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def validate_tool_output_rendering(
+    lambda_map_record,
+    function_name,
+    assistant_id,
+    assistant_key,
+    corpus_key,
+    filename,
+    validation_errors,
+):
+    if not isinstance(lambda_map_record, dict):
+        validation_errors[filename].append(
+            {
+                "error": f"tool_to_lambda_map entry for function {function_name} in assistant {assistant_id} ({assistant_key}) in corpus {corpus_key} must be an object",
+            }
+        )
+        return
+
+    allow_raw_tool_response = lambda_map_record.get("allow_raw_tool_response")
+    if "allow_raw_tool_response" in lambda_map_record and not isinstance(
+        allow_raw_tool_response, bool
+    ):
+        validation_errors[filename].append(
+            {
+                "error": f"allow_raw_tool_response for function {function_name} in assistant {assistant_id} ({assistant_key}) in corpus {corpus_key} must be a boolean true/false value",
+            }
+        )
+
+    if is_non_empty_string(lambda_map_record.get("return_value_text_template")):
+        return
+
+    if allow_raw_tool_response is True:
+        return
+
+    lambda_name = lambda_map_record.get("lambda_name", "<missing>")
+    validation_errors[filename].append(
+        {
+            "error": f"tool_to_lambda_map entry for function {function_name} in assistant {assistant_id} ({assistant_key}) in corpus {corpus_key} using lambda {lambda_name} must define a non-empty return_value_text_template or set allow_raw_tool_response: true",
+        }
+    )
+
+
 def validate(
     obj,
     filename,
@@ -164,6 +209,7 @@ def validate(
     if obj_type == ObjectType.ASSISTANT:
 
         assistant_id = obj["assistant_id"]
+        assistant_key = obj.get("assistant_key")
         uuid_collection[assistant_id].append(filename)
 
         if assistant_id != fields["assistant_id"]:
@@ -230,6 +276,19 @@ def validate(
                                         "error": f"lambda_name missing in tool_to_lambda_map for function {function_name} in assistant {assistant_id} in corpus {corpus_key}",
                                     }
                                 )
+
+        tool_to_lambda_map = obj.get("tool_to_lambda_map")
+        if isinstance(tool_to_lambda_map, dict):
+            for function_name, lambda_map_record in tool_to_lambda_map.items():
+                validate_tool_output_rendering(
+                    lambda_map_record,
+                    function_name,
+                    assistant_id,
+                    assistant_key,
+                    corpus_key,
+                    filename,
+                    validation_errors,
+                )
 
         # Validate assistant_model_name if present
         if "assistant_model_name" in obj:

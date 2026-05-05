@@ -41,6 +41,21 @@ def _assistant_object(model_name):
     }
 
 
+def _assistant_object_with_tool(lambda_map_record):
+    obj = _assistant_object("GPT_4_1")
+    obj["tools"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_in_poemai",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    obj["tool_to_lambda_map"] = {"search_in_poemai": lambda_map_record}
+    return obj
+
+
 def _corpus_metadata_object(openai_base_url=None):
     obj = {
         "pk": "CORPUS_METADATA#",
@@ -100,3 +115,51 @@ def test_assistant_model_name_rejects_non_openai_name_without_custom_api_url():
         "not a valid OpenAI model" in error["error"]
         for error in errors["assistant.yaml"]
     )
+
+
+def test_tool_output_rendering_rejects_missing_template_without_raw_opt_in():
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object_with_tool(
+            {
+                "lambda_name": "poemai-rag-tool",
+                "default_parameters": {},
+            }
+        ),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" in errors
+    assert any(
+        "search_in_poemai" in error["error"]
+        and "poemai-rag-tool" in error["error"]
+        and "return_value_text_template" in error["error"]
+        and "allow_raw_tool_response: true" in error["error"]
+        for error in errors["assistant.yaml"]
+    )
+
+
+def test_tool_output_rendering_accepts_non_empty_template():
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object_with_tool(
+            {
+                "lambda_name": "poemai-rag-tool",
+                "return_value_text_template": "Search completed.",
+                "default_parameters": {},
+            }
+        ),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" not in errors
+
+
+def test_tool_output_rendering_accepts_explicit_raw_opt_in():
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object_with_tool(
+            {
+                "lambda_name": "small-debug-tool",
+                "allow_raw_tool_response": True,
+                "default_parameters": {},
+            }
+        ),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" not in errors
