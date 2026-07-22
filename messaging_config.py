@@ -11,6 +11,7 @@ SUPPORTED_PROVIDER = "meta"
 SUPPORTED_CHANNEL = "whatsapp"
 CALLBACK_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 META_ID_PATTERN = re.compile(r"^[0-9]+$")
+PARAMETER_RESOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 class KeyElement(str, Enum):
@@ -115,8 +116,8 @@ PROVIDER_REQUIRED_FIELDS = {
         "environment",
         "provider",
         "channel",
-        "app_secret_secret_name",
-        "verify_token_secret_name",
+        "app_secret_parameter_name",
+        "verify_token_parameter_name",
         "meta_app_id",
         "active",
         "configuration_version",
@@ -131,7 +132,7 @@ PROVIDER_REQUIRED_FIELDS = {
         "callback_id",
         "phone_number_id",
         "whatsapp_business_account_id",
-        "access_token_secret_name",
+        "access_token_parameter_name",
         "active",
         "configuration_version",
         "created_at",
@@ -206,16 +207,41 @@ def _valid_key_value(value):
     return isinstance(value, str) and bool(value.strip()) and "#" not in value
 
 
-def _validate_secret_name(errors, path, field_name, value, environment):
-    expected_prefix = f"{environment}/messaging/"
-    if not isinstance(value, str) or not value.startswith(expected_prefix):
+def messaging_parameter_path_prefix(
+    environment,
+    provider=SUPPORTED_PROVIDER,
+    channel=SUPPORTED_CHANNEL,
+):
+    return (
+        f"/poemai/{environment}/messaging/providers/{provider}/" f"channels/{channel}/"
+    )
+
+
+def callback_credential_parameter_name(environment, callback_id, credential_name):
+    return (
+        f"{messaging_parameter_path_prefix(environment)}"
+        f"callbacks/{callback_id}/credentials/{credential_name}"
+    )
+
+
+def connection_credential_parameter_name(
+    environment,
+    provider_connection_id,
+    credential_name,
+):
+    return (
+        f"{messaging_parameter_path_prefix(environment)}"
+        f"connections/{provider_connection_id}/credentials/{credential_name}"
+    )
+
+
+def _validate_parameter_name(errors, path, field_name, value, expected):
+    if value != expected:
         _add_error(
             errors,
             path,
-            f"{field_name} must be a secret name below {expected_prefix}",
+            f"{field_name} must equal {expected}",
         )
-    elif any(character.isspace() for character in value):
-        _add_error(errors, path, f"{field_name} must not contain whitespace")
 
 
 def _contains_secret_value_field(value):
@@ -349,16 +375,22 @@ def _validate_provider_records(errors, path, records, data, environment):
                     path,
                     f"{location}.callback_id must be 32 lowercase hex characters",
                 )
-            for field_name in (
-                "app_secret_secret_name",
-                "verify_token_secret_name",
-            ):
-                _validate_secret_name(
+            callback_parameters = {
+                "app_secret_parameter_name": "app-secret",
+                "verify_token_parameter_name": "verify-token",
+            }
+            for field_name, credential_name in callback_parameters.items():
+                expected = callback_credential_parameter_name(
+                    environment,
+                    callback_id,
+                    credential_name,
+                )
+                _validate_parameter_name(
                     errors,
                     path,
                     f"{location}.{field_name}",
                     record.get(field_name),
-                    environment,
+                    expected,
                 )
             meta_app_id = record.get("meta_app_id")
             if not isinstance(meta_app_id, str) or not META_ID_PATTERN.fullmatch(
@@ -367,12 +399,26 @@ def _validate_provider_records(errors, path, records, data, environment):
                 _add_error(errors, path, f"{location}.meta_app_id must be numeric")
             identity = callback_id
         elif object_type == ObjectTypeKeys.PROVIDER_CONNECTION:
-            _validate_secret_name(
+            provider_connection_id = record.get("provider_connection_id")
+            if not isinstance(provider_connection_id, str) or not (
+                len(provider_connection_id) <= 128
+                and PARAMETER_RESOURCE_ID_PATTERN.fullmatch(provider_connection_id)
+            ):
+                _add_error(
+                    errors,
+                    path,
+                    f"{location}.provider_connection_id must be a 1-128 character lowercase Parameter Store path segment",
+                )
+            _validate_parameter_name(
                 errors,
                 path,
-                f"{location}.access_token_secret_name",
-                record.get("access_token_secret_name"),
-                environment,
+                f"{location}.access_token_parameter_name",
+                record.get("access_token_parameter_name"),
+                connection_credential_parameter_name(
+                    environment,
+                    provider_connection_id,
+                    "access-token",
+                ),
             )
             for field_name in ("phone_number_id", "whatsapp_business_account_id"):
                 value = record.get(field_name)

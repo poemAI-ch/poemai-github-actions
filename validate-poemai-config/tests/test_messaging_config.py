@@ -15,6 +15,7 @@ CALLBACK_ID = "0123456789abcdef0123456789abcdef"
 CONNECTION_ID = "meta-whatsapp-poemai-bot-staging"
 DESTINATION_ID = "123456789012345"
 CASE_MANAGER_ID = "f4485650031041918c500c43170225e3"
+PARAMETER_PREFIX = "/poemai/staging/messaging/providers/meta/channels/whatsapp"
 
 
 def _write_yaml(path, data):
@@ -39,8 +40,8 @@ def _provider_config():
                 **common,
                 "object_type": "PROVIDER_CALLBACK",
                 "callback_id": CALLBACK_ID,
-                "app_secret_secret_name": "staging/messaging/meta/app-secret",
-                "verify_token_secret_name": "staging/messaging/meta/verify-token",
+                "app_secret_parameter_name": f"{PARAMETER_PREFIX}/callbacks/{CALLBACK_ID}/credentials/app-secret",
+                "verify_token_parameter_name": f"{PARAMETER_PREFIX}/callbacks/{CALLBACK_ID}/credentials/verify-token",
                 "meta_app_id": "111222333444555",
             },
             {
@@ -50,7 +51,7 @@ def _provider_config():
                 "callback_id": CALLBACK_ID,
                 "phone_number_id": DESTINATION_ID,
                 "whatsapp_business_account_id": "999888777666555",
-                "access_token_secret_name": "staging/messaging/meta/access-token",
+                "access_token_parameter_name": f"{PARAMETER_PREFIX}/connections/{CONNECTION_ID}/credentials/access-token",
             },
             {
                 **common,
@@ -154,7 +155,7 @@ def test_build_business_route_aliases_creates_direct_lookup_item(tmp_path):
     ]
 
 
-def test_validator_rejects_secret_values_and_cross_callback_aliases(tmp_path):
+def test_validator_rejects_credential_values_and_cross_callback_aliases(tmp_path):
     _write_valid_project(tmp_path)
     path = tmp_path / "environments/staging/messaging/provider_connections.yaml"
     data = _provider_config()
@@ -171,6 +172,51 @@ def test_validator_rejects_secret_values_and_cross_callback_aliases(tmp_path):
 
     assert any("secret value field" in message for message in messages)
     assert any("wrong callback" in message for message in messages)
+
+
+def test_validator_requires_deterministic_parameter_paths(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/provider_connections.yaml"
+    data = _provider_config()
+    data["objects"][0]["app_secret_parameter_name"] = (
+        "/poemai/production/messaging/providers/meta/channels/whatsapp/"
+        f"callbacks/{CALLBACK_ID}/credentials/app-secret"
+    )
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert any(
+        "app_secret_parameter_name must equal "
+        f"{PARAMETER_PREFIX}/callbacks/{CALLBACK_ID}/credentials/app-secret" in message
+        for message in messages
+    )
+
+
+def test_validator_rejects_connection_ids_that_are_not_safe_path_segments(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/provider_connections.yaml"
+    data = _provider_config()
+    data["objects"][1]["provider_connection_id"] = "Meta/Unsafe"
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert any(
+        "provider_connection_id must be a 1-128 character lowercase Parameter Store path segment"
+        in message
+        for message in messages
+    )
 
 
 def test_validator_rejects_duplicate_active_destination_claims(tmp_path):
