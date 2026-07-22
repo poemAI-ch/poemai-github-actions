@@ -1,52 +1,56 @@
-name: 'Deploy poemai Config'
-description: 'Deploy poemai configuration files via Lambda'
-author: 'poemAI-ch'
+name: "Deploy poemai Config"
+description: "Deploy poemai configuration files via Lambda"
+author: "poemAI-ch"
 
 inputs:
   environment:
-    description: 'Environment to deploy to (production, staging, development)'
+    description: "Environment to deploy to (production, staging, development)"
     required: true
   target-environment:
-    description: 'Target environment to deploy to (for cross-deployment). Defaults to same as source environment.'
+    description: "Target environment to deploy to (for cross-deployment). Defaults to same as source environment."
     required: false
-    default: ''
+    default: ""
   lambda-function-name:
-    description: 'Name of the Lambda function to invoke for deployment'
+    description: "Name of the Lambda function to invoke for deployment"
     required: true
   role-to-assume:
-    description: 'ARN of the AWS IAM role to assume'
+    description: "ARN of the AWS IAM role to assume"
     required: true
   aws-region:
-    description: 'AWS region'
+    description: "AWS region"
     required: false
-    default: 'eu-central-2'
+    default: "eu-central-2"
   project-root-path:
-    description: 'Path to the project root containing environments/ directory'
+    description: "Path to the project root containing environments/ directory"
     required: false
-    default: '.'
+    default: "."
   python-version:
-    description: 'Python version to use'
+    description: "Python version to use"
     required: false
-    default: '3.12'
+    default: "3.12"
   version-id:
-    description: 'Optional version identifier to associate with the configuration objects'
+    description: "Optional version identifier to associate with the configuration objects"
     required: false
-    default: ''
+    default: ""
   temporary-corpus-key:
     description: 'Optional: Deploy to a temporary corpus key with TTL (format: TEMP_12345 or auto-generated if set to "auto")'
     required: false
-    default: ''
+    default: ""
   temporary-corpus-key-ttl-hours:
-    description: 'TTL for temporary corpus key in hours'
+    description: "TTL for temporary corpus key in hours"
     required: false
-    default: '24'
+    default: "24"
   test-bot-url-template:
     description: 'Optional: Jinja2 URL template for the test bot (e.g., "https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/")'
     required: false
-    default: ''
+    default: ""
+  configuration-scope:
+    description: "Configuration to deploy: corpus or messaging"
+    required: false
+    default: "corpus"
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -62,7 +66,7 @@ runs:
     - name: Install dependencies
       shell: bash
       run: |
-        pip install boto3 pyyaml
+        pip install boto3 pyyaml poemai-utils==3.2.2
 
     - name: Deploy configuration via Lambda
       shell: bash
@@ -75,8 +79,9 @@ runs:
           echo "  Target environment: ${{ inputs.environment }} (same as source)"
         fi
         echo "  Lambda function: ${{ inputs.lambda-function-name }}"
+        echo "  Configuration scope: ${{ inputs.configuration-scope }}"
         echo "  Project root: ${{ inputs.project-root-path }}"
-        
+
         if [ -n "${{ inputs.temporary-corpus-key }}" ]; then
           if [ "${{ inputs.temporary-corpus-key }}" = "auto" ]; then
             echo "  🧪 Temporary deployment: Auto-generated corpus key"
@@ -86,18 +91,18 @@ runs:
           echo "  ⏰ TTL: ${{ inputs.temporary-corpus-key-ttl-hours }} hours"
         fi
         echo ""
-        
+
         COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
         VERSION_ID="${{ inputs.version-id }}"
         if [ -z "$VERSION_ID" ]; then
           VERSION_ID="$COMMIT_SHORT"
         fi
-        
+
         TARGET_ENV_ARG=""
         if [ -n "${{ inputs.target-environment }}" ]; then
           TARGET_ENV_ARG="--target-environment ${{ inputs.target-environment }}"
         fi
-        
+
         python ${{ github.action_path }}/deploy_config_with_lambda_call.py \
           --environment "${{ inputs.environment }}" \
           $TARGET_ENV_ARG \
@@ -106,8 +111,9 @@ runs:
           --version-id "$VERSION_ID" \
           --temporary-corpus-key "${{ inputs.temporary-corpus-key }}" \
           --temporary-corpus-key-ttl-hours "${{ inputs.temporary-corpus-key-ttl-hours }}" \
-          --test-bot-url-template "${{ inputs.test-bot-url-template }}"
-        
+          --test-bot-url-template "${{ inputs.test-bot-url-template }}" \
+          --configuration-scope "${{ inputs.configuration-scope }}"
+
         if [ -n "${{ inputs.temporary-corpus-key }}" ]; then
           echo "🧪 Temporary bot deployment completed - will auto-expire in ${{ inputs.temporary-corpus-key-ttl-hours }} hours"
         else
@@ -115,5 +121,5 @@ runs:
         fi
 
 branding:
-  icon: 'upload-cloud'
-  color: 'blue'
+  icon: "upload-cloud"
+  color: "blue"

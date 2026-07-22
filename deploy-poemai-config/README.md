@@ -9,6 +9,8 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 - **URL Generation**: Generate test bot URLs for easy access to temporary deployments
 - **Version Management**: Support for version IDs and deployment tracking
 - **Multi-format Support**: Handle both single and multi-document YAML files
+- **Messaging Configuration**: Validate and deploy provider records separately from corpus configuration
+- **Derived Route Aliases**: Generate direct document-table lookup items from active corpus messaging routes
 
 ## Usage
 
@@ -16,7 +18,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.7.5
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
   with:
     environment: 'production'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -27,7 +29,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Temporary Test Bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.7.5
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -36,6 +38,24 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
     temporary-corpus-key-ttl-hours: '24'
     test-bot-url-template: 'https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/'
 ```
+
+### Messaging Provider Deployment
+
+```yaml
+- name: Deploy Messaging Provider Configuration
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
+  with:
+    environment: 'staging'
+    configuration-scope: 'messaging'
+    lambda-function-name: 'poemai-messaging-config-deployer-staging'
+    role-to-assume: 'arn:aws:iam::ACCOUNT:role/poemai-github-role-devops'
+```
+
+Messaging provider records are read from
+`environments/<environment>/messaging/provider_connections.yaml`. Secret names
+are allowed below the environment's messaging prefix, but secret values are
+rejected. Corpus deployments continue to read `corpus_keys/**` and append a
+derived direct-lookup item for each active messaging route.
 
 ## Input Parameters
 
@@ -49,6 +69,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 | `temporary-corpus-key` | Temporary corpus key for test deployments (use 'auto' for auto-generation) | No | - |
 | `temporary-corpus-key-ttl-hours` | TTL in hours for temporary deployments | No | `24` |
 | `test-bot-url-template` | Jinja2 URL template for test bot access | No | - |
+| `configuration-scope` | Deploy `corpus` objects or `messaging` provider records | No | `corpus` |
 
 ## Temporary Deployment Features
 
@@ -71,6 +92,8 @@ See [TEMPORARY_DEPLOYMENT.md](TEMPORARY_DEPLOYMENT.md) for detailed examples and
 project-root/
   environments/
     staging/
+      messaging/
+        provider_connections.yaml
       corpus_keys/
         BOT_NAME/
           assistant.yaml
@@ -139,6 +162,7 @@ The action provides comprehensive error handling for:
 
 ## Version History
 
+- **v5.8.0**: Added messaging provider validation/deployment and derived corpus-route aliases
 - **v5.1.1**: Added temporary corpus key deployment with URL generation
 - **v5.0.0**: Enhanced configuration deployment with wildcard support
 - **v4.x**: Previous versions (see git history)

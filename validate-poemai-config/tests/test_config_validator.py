@@ -9,7 +9,9 @@ if "jsonschema" not in sys.modules:
     sys.modules["jsonschema"] = types.SimpleNamespace(
         validate=lambda *args, **kwargs: None
     )
-if "poemai_utils" not in sys.modules:
+try:
+    import poemai_utils  # noqa: F401
+except ImportError:
     poemai_utils = types.ModuleType("poemai_utils")
     enum_utils = types.ModuleType("poemai_utils.enum_utils")
     enum_utils.add_enum_repr = lambda enum_cls: enum_cls

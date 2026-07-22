@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import logging
+import sys
 import time
 import uuid
 from decimal import Decimal
@@ -156,7 +157,11 @@ def generate_temporary_corpus_key():
     return f"TEMP_{uuid.uuid4().hex[:10].upper()}"
 
 
-def gather_json_representations(environment, project_root_path="."):
+def gather_json_representations(
+    environment,
+    project_root_path=".",
+    include_messaging_aliases=True,
+):
     """
     Gather all json representations of the configuration files
     """
@@ -188,6 +193,16 @@ def gather_json_representations(environment, project_root_path="."):
                     _logger.info(
                         f"Loaded document {i} from {file}:\n{json.dumps(doc, indent=2, ensure_ascii=False)}\n"
                     )
+
+    if include_messaging_aliases:
+        repository_root = Path(__file__).resolve().parents[1]
+        if str(repository_root) not in sys.path:
+            sys.path.insert(0, str(repository_root))
+        from messaging_config import build_business_route_aliases
+
+        aliases = build_business_route_aliases(project_root_path, environment)
+        all_objects.extend(aliases)
+        _logger.info("Added %s derived messaging route aliases", len(aliases))
 
     _logger.info(f"Found {len(all_objects)} objects to load")
     return all_objects
@@ -252,6 +267,12 @@ if __name__ == "__main__":
         default="",
         help="Optional Jinja2 URL template for test bot (e.g., 'https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/')",
     )
+    parser.add_argument(
+        "--configuration-scope",
+        choices=("corpus", "messaging"),
+        default="corpus",
+        help="Deploy corpus configuration or messaging provider records",
+    )
     # parse arguments
     args, unknown = parser.parse_known_args()
 
@@ -276,10 +297,25 @@ if __name__ == "__main__":
             f"Standard deployment: Using '{args.environment}' environment for both source and target"
         )
 
-    # gather all json representations
-    objects_to_load = gather_json_representations(
-        args.environment, args.project_root_path
-    )
+    if args.configuration_scope == "messaging":
+        if temporary_corpus_key:
+            parser.error("temporary corpus keys cannot be used for messaging config")
+        repository_root = Path(__file__).resolve().parents[1]
+        if str(repository_root) not in sys.path:
+            sys.path.insert(0, str(repository_root))
+        from messaging_config import build_provider_items
+
+        objects_to_load = build_provider_items(
+            args.project_root_path,
+            args.environment,
+        )
+        _logger.info("Prepared %s messaging provider records", len(objects_to_load))
+    else:
+        objects_to_load = gather_json_representations(
+            args.environment,
+            args.project_root_path,
+            include_messaging_aliases=not temporary_corpus_key,
+        )
 
     # Apply temporary corpus key transformation if specified
     if temporary_corpus_key:
@@ -339,9 +375,17 @@ if __name__ == "__main__":
                 )
                 exit(1)
 
-            _logger.info(
-                f"Object {i}:\n{json.dumps(obj, indent=2, ensure_ascii=False)}\n--------------------------------\n"
-            )
+            if args.configuration_scope == "messaging":
+                _logger.info(
+                    "Messaging object %s: pk=%s sk=%s",
+                    i,
+                    obj["pk"],
+                    obj["sk"],
+                )
+            else:
+                _logger.info(
+                    f"Object {i}:\n{json.dumps(obj, indent=2, ensure_ascii=False)}\n--------------------------------\n"
+                )
     else:
         _logger.info(
             "Skipping pk/sk validation for temporary corpus key deployment (lambda will regenerate them)"
@@ -349,6 +393,10 @@ if __name__ == "__main__":
         _logger.info(
             f"Prepared {len(objects_to_load)} objects for temporary deployment"
         )
+        for i, obj in enumerate(objects_to_load):
+            _logger.info(
+                f"Temporary object {i}:\n{json.dumps(obj, indent=2, ensure_ascii=False)}"
+            )
 
     request = {
         "objects_to_load": objects_to_load,

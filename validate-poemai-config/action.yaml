@@ -1,30 +1,30 @@
-name: 'Validate poemai Config'
-description: 'Validate poemai configuration files using shared validation tools'
-author: 'poemAI-ch'
+name: "Validate poemai Config"
+description: "Validate poemai configuration files using shared validation tools"
+author: "poemAI-ch"
 
 inputs:
   environment:
-    description: 'Environment to validate (production, staging, development)'
+    description: "Environment to validate (production, staging, development)"
     required: true
   project-root-path:
-    description: 'Path to the project root containing environments/ directory'
+    description: "Path to the project root containing environments/ directory"
     required: false
-    default: '.'
+    default: "."
   python-version:
-    description: 'Python version to use'
+    description: "Python version to use"
     required: false
-    default: '3.12'
+    default: "3.12"
   additional-requirements:
-    description: 'Additional pip packages to install (space-separated)'
+    description: "Additional pip packages to install (space-separated)"
     required: false
-    default: ''
+    default: ""
   corpus-keys:
-    description: 'Comma-separated list of allowed corpus keys (optional - if not provided, all corpus keys are allowed)'
+    description: "Comma-separated list of allowed corpus keys (optional - if not provided, all corpus keys are allowed)"
     required: false
-    default: ''
+    default: ""
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -34,7 +34,7 @@ runs:
     - name: Install base dependencies
       shell: bash
       run: |
-        pip install jsonschema pyyaml poemai-utils requests
+        pip install jsonschema pyyaml poemai-utils==3.2.2 requests
 
     - name: Install additional requirements
       if: ${{ inputs.additional-requirements != '' }}
@@ -49,13 +49,13 @@ runs:
         echo "  Environment: ${{ inputs.environment }}"
         echo "  Project root: ${{ inputs.project-root-path }}"
         echo ""
-        
+
         python ${{ github.action_path }}/config_validator.py \
           --project-root-path="${{ inputs.project-root-path }}" \
           --environment="${{ inputs.environment }}"
-        
+
         echo "✅ Configuration validation completed successfully!"
 
 branding:
-  icon: 'check-circle'
-  color: 'green'
+  icon: "check-circle"
+  color: "green"

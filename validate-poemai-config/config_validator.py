@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import sys
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
@@ -806,6 +807,15 @@ def validate_monitoring_config(project_root_path, environment):
     return dict(validation_errors)
 
 
+def validate_messaging_config(project_root_path, environment):
+    repository_root = Path(__file__).resolve().parents[1]
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+    from messaging_config import validate_messaging_configuration
+
+    return validate_messaging_configuration(project_root_path, environment)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -839,9 +849,14 @@ def main():
     monitoring_validation_errors = validate_monitoring_config(
         root_path, args.environment
     )
+    messaging_validation_errors = validate_messaging_config(root_path, args.environment)
 
     # Merge validation errors
-    all_validation_errors = {**validation_errors, **monitoring_validation_errors}
+    all_validation_errors = {
+        **validation_errors,
+        **monitoring_validation_errors,
+        **messaging_validation_errors,
+    }
 
     project_root_path_abs_string = root_path.absolute().as_posix()
 
