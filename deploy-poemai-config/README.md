@@ -18,7 +18,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.1
   with:
     environment: 'production'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -29,7 +29,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Temporary Test Bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.1
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -43,7 +43,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Messaging Provider Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.1
   with:
     environment: 'staging'
     configuration-scope: 'messaging'
@@ -162,6 +162,7 @@ The action provides comprehensive error handling for:
 
 ## Version History
 
+- **v5.8.1**: Install the DynamoDB SDK required by messaging validation
 - **v5.8.0**: Added messaging provider validation/deployment and derived corpus-route aliases
 - **v5.1.1**: Added temporary corpus key deployment with URL generation
 - **v5.0.0**: Enhanced configuration deployment with wildcard support

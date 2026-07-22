@@ -5,9 +5,11 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from messaging_config import (build_business_route_aliases,
-                              build_provider_items,
-                              validate_messaging_configuration)
+from messaging_config import (
+    build_business_route_aliases,
+    build_provider_items,
+    validate_messaging_configuration,
+)
 
 CALLBACK_ID = "0123456789abcdef0123456789abcdef"
 CONNECTION_ID = "meta-whatsapp-poemai-bot-staging"

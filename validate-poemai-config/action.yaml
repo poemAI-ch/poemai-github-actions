@@ -34,7 +34,7 @@ runs:
     - name: Install base dependencies
       shell: bash
       run: |
-        pip install jsonschema pyyaml poemai-utils==3.2.2 requests
+        pip install boto3 jsonschema pyyaml poemai-utils==3.2.2 requests
 
     - name: Install additional requirements
       if: ${{ inputs.additional-requirements != '' }}
