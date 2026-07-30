@@ -114,6 +114,26 @@ def _write_valid_project(tmp_path):
             },
         },
     )
+    _write_yaml(
+        tmp_path / "environments/staging/messaging/bot_start.yaml",
+        {
+            "environment": "staging",
+            "configuration_version": 1,
+            "default_target": {
+                "corpus_key": "POEMAI_BOT",
+                "case_manager_id": CASE_MANAGER_ID,
+            },
+            "start_words": {
+                "PoemAI": {
+                    "corpus_key": "POEMAI_BOT",
+                    "case_manager_id": CASE_MANAGER_ID,
+                }
+            },
+            "unknown_start_word": {
+                "de": "Unbekanntes Startwort '{start_word}'.",
+            },
+        },
+    )
 
 
 def test_build_provider_items_uses_dao_helper_key_shapes(tmp_path):
@@ -128,10 +148,21 @@ def test_build_provider_items_uses_dao_helper_key_shapes(tmp_path):
             "PROVIDER_DESTINATION##PROVIDER#meta#CHANNEL#whatsapp",
             f"PROVIDER_DESTINATION_ID#{DESTINATION_ID}",
         ),
+        (
+            "MESSAGING_CONFIGURATION#",
+            "CONFIGURATION_KEY#BOT_START",
+        ),
     ]
     assert "callback_id" not in items[0]
     assert "provider_connection_id" not in items[1]
     assert "provider_destination_id" not in items[2]
+    assert "configuration_key" not in items[3]
+    assert items[3]["start_words"] == {
+        "poemai": {
+            "corpus_key": "POEMAI_BOT",
+            "case_manager_id": CASE_MANAGER_ID,
+        }
+    }
 
 
 def test_build_business_route_aliases_creates_direct_lookup_item(tmp_path):
@@ -245,3 +276,78 @@ def test_validator_rejects_duplicate_active_destination_claims(tmp_path):
     ]
 
     assert any("already claimed" in message for message in messages)
+
+
+def test_validator_rejects_unknown_bot_start_targets(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/bot_start.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["default_target"]["corpus_key"] = "UNKNOWN"
+    data["start_words"]["PoemAI"]["case_manager_id"] = "unknown-manager"
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert any("references unknown corpus UNKNOWN" in message for message in messages)
+    assert any(
+        "references unknown case manager unknown-manager" in message
+        for message in messages
+    )
+
+
+def test_validator_rejects_duplicate_normalized_start_words(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/bot_start.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["start_words"]["  poemai  "] = data["start_words"]["PoemAI"]
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert any("normalize to the same word" in message for message in messages)
+
+
+def test_validator_requires_localized_unknown_word_response(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/bot_start.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    del data["unknown_start_word"]["de"]
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert "unknown_start_word.de must be configured" in messages
+
+
+def test_validator_rejects_malformed_unknown_word_templates(tmp_path):
+    _write_valid_project(tmp_path)
+    path = tmp_path / "environments/staging/messaging/bot_start.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["unknown_start_word"]["de"] = "Unbekannt: {wrong}"
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [
+        error["error"]
+        for errors_for_file in errors.values()
+        for error in errors_for_file
+    ]
+
+    assert any(
+        "may only use the {start_word} placeholder" in message for message in messages
+    )

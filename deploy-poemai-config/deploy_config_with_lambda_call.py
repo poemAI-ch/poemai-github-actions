@@ -309,7 +309,9 @@ if __name__ == "__main__":
             args.project_root_path,
             args.environment,
         )
-        _logger.info("Prepared %s messaging provider records", len(objects_to_load))
+        _logger.info(
+            "Prepared %s messaging configuration records", len(objects_to_load)
+        )
     else:
         objects_to_load = gather_json_representations(
             args.environment,

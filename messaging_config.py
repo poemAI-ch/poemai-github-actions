@@ -2,6 +2,7 @@ import re
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
+from string import Formatter
 
 import yaml
 from poemai_utils.aws.dao_helper import DaoHelper
@@ -21,6 +22,7 @@ class KeyElement(str, Enum):
     CHANNEL = "CHANNEL"
     PROVIDER_CONNECTION_ID = "PROVIDER_CONNECTION_ID"
     PROVIDER_DESTINATION_ID = "PROVIDER_DESTINATION_ID"
+    CONFIGURATION_KEY = "CONFIGURATION_KEY"
 
 
 add_enum_repr(KeyElement)
@@ -30,6 +32,7 @@ class ObjectTypeKeys(str, Enum):
     PROVIDER_CALLBACK = "PROVIDER_CALLBACK"
     PROVIDER_CONNECTION = "PROVIDER_CONNECTION"
     PROVIDER_DESTINATION = "PROVIDER_DESTINATION"
+    MESSAGING_CONFIGURATION = "MESSAGING_CONFIGURATION"
 
 
 add_enum_repr(ObjectTypeKeys)
@@ -76,6 +79,15 @@ add_enum_attrs(
                 KeyElement.PROVIDER,
                 KeyElement.CHANNEL,
                 KeyElement.PROVIDER_DESTINATION_ID,
+            ],
+        },
+        ObjectTypeKeys.MESSAGING_CONFIGURATION: {
+            "pk_components": [KeyElement.OBJECT_TYPE],
+            "sk_components": [KeyElement.CONFIGURATION_KEY],
+            "required_fields": [KeyElement.CONFIGURATION_KEY],
+            "to_drop_fields": [
+                KeyElement.OBJECT_TYPE,
+                KeyElement.CONFIGURATION_KEY,
             ],
         },
     }
@@ -172,6 +184,16 @@ ROUTE_REQUIRED_FIELDS = {
     "configuration_version",
 }
 
+BOT_START_CONFIGURATION_KEY = "BOT_START"
+BOT_START_REQUIRED_FIELDS = {
+    "environment",
+    "configuration_version",
+    "default_target",
+    "start_words",
+    "unknown_start_word",
+}
+TARGET_REQUIRED_FIELDS = {"corpus_key", "case_manager_id"}
+
 
 def provider_config_path(project_root_path, environment):
     return (
@@ -180,6 +202,16 @@ def provider_config_path(project_root_path, environment):
         / environment
         / "messaging"
         / "provider_connections.yaml"
+    )
+
+
+def bot_start_config_path(project_root_path, environment):
+    return (
+        Path(project_root_path).absolute()
+        / "environments"
+        / environment
+        / "messaging"
+        / "bot_start.yaml"
     )
 
 
@@ -197,6 +229,13 @@ def load_provider_objects(project_root_path, environment):
         return path, [], data
     objects = data.get("objects")
     return path, objects if isinstance(objects, list) else [], data
+
+
+def load_bot_start_configuration(project_root_path, environment):
+    path = bot_start_config_path(project_root_path, environment)
+    if not path.exists():
+        return path, None
+    return path, _read_yaml(path)
 
 
 def _add_error(errors, path, message):
@@ -268,8 +307,9 @@ def _object_type(record):
 
 
 def build_provider_items(project_root_path, environment):
-    path, records, data = load_provider_objects(project_root_path, environment)
-    if data is None:
+    _, records, provider_data = load_provider_objects(project_root_path, environment)
+    _, bot_start_data = load_bot_start_configuration(project_root_path, environment)
+    if provider_data is None and bot_start_data is None:
         return []
     errors = validate_messaging_configuration(project_root_path, environment)
     if errors:
@@ -287,6 +327,21 @@ def build_provider_items(project_root_path, environment):
                 FIELD_TO_KEY_FORMATTERS,
                 object_type,
                 record,
+            )
+        )
+    if bot_start_data is not None:
+        item_data = dict(bot_start_data)
+        item_data["configuration_key"] = BOT_START_CONFIGURATION_KEY
+        item_data["start_words"] = {
+            normalize_start_word(start_word): target
+            for start_word, target in bot_start_data["start_words"].items()
+        }
+        items.append(
+            DaoHelper.build_object_item(
+                KeyElement,
+                FIELD_TO_KEY_FORMATTERS,
+                ObjectTypeKeys.MESSAGING_CONFIGURATION,
+                item_data,
             )
         )
     return items
@@ -534,6 +589,236 @@ def _case_managers(corpus_directory):
     return managers
 
 
+def normalize_start_word(value):
+    return " ".join(value.split()).casefold()
+
+
+def _active_messaging_languages(project_root_path, environment):
+    languages = set()
+    for metadata_path in _corpus_metadata_files(project_root_path, environment):
+        metadata = _read_yaml(metadata_path)
+        messaging = metadata.get("messaging") if isinstance(metadata, dict) else None
+        if not isinstance(messaging, dict):
+            continue
+        for route in messaging.get("routes") or []:
+            if isinstance(route, dict) and route.get("active"):
+                language_code = route.get("default_language_code")
+                if isinstance(language_code, str) and language_code:
+                    languages.add(language_code)
+    return languages
+
+
+def _corpus_catalog(project_root_path, environment):
+    catalog = {}
+    for metadata_path in _corpus_metadata_files(project_root_path, environment):
+        metadata = _read_yaml(metadata_path)
+        if not isinstance(metadata, dict):
+            continue
+        corpus_key = metadata.get("corpus_key")
+        if isinstance(corpus_key, str):
+            catalog[corpus_key] = (
+                metadata_path,
+                metadata,
+                _case_managers(metadata_path.parent),
+            )
+    return catalog
+
+
+def _validate_target(
+    errors,
+    path,
+    location,
+    target,
+    environment,
+    corpus_catalog,
+    required_languages,
+):
+    if not isinstance(target, dict):
+        _add_error(errors, path, f"{location} must be a mapping")
+        return
+    missing = sorted(TARGET_REQUIRED_FIELDS - set(target))
+    unexpected = sorted(set(target) - TARGET_REQUIRED_FIELDS)
+    if missing:
+        _add_error(errors, path, f"{location} is missing fields {missing}")
+    if unexpected:
+        _add_error(errors, path, f"{location} has unsupported fields {unexpected}")
+
+    for field_name in TARGET_REQUIRED_FIELDS:
+        if not _valid_key_value(target.get(field_name)):
+            _add_error(
+                errors,
+                path,
+                f"{location}.{field_name} must be non-empty and contain no #",
+            )
+
+    corpus_key = target.get("corpus_key")
+    corpus_entry = corpus_catalog.get(corpus_key)
+    if corpus_entry is None:
+        _add_error(errors, path, f"{location} references unknown corpus {corpus_key}")
+        return
+
+    _, metadata, case_managers = corpus_entry
+    if metadata.get("environment") != environment:
+        _add_error(
+            errors,
+            path,
+            f"{location} references a corpus outside environment {environment}",
+        )
+    if metadata.get("public_bot") is not True:
+        _add_error(errors, path, f"{location} references a non-public corpus")
+
+    case_manager_id = target.get("case_manager_id")
+    case_manager = case_managers.get(case_manager_id)
+    if case_manager is None:
+        _add_error(
+            errors,
+            path,
+            f"{location} references unknown case manager {case_manager_id} in corpus {corpus_key}",
+        )
+        return
+    if case_manager.get("corpus_key") not in (None, corpus_key):
+        _add_error(
+            errors,
+            path,
+            f"{location} case manager belongs to another corpus",
+        )
+
+    language_mapping = case_manager.get("initial_workspace", {}).get(
+        "_language_mapping", {}
+    )
+    for language_code in sorted(required_languages):
+        if language_code not in language_mapping:
+            _add_error(
+                errors,
+                path,
+                f"{location} case manager does not support language {language_code}",
+            )
+
+
+def _validate_response_template(errors, path, language_code, template):
+    location = f"unknown_start_word.{language_code}"
+    if not isinstance(template, str) or not template.strip():
+        _add_error(errors, path, f"{location} must be a non-empty string")
+        return
+    placeholder_count = 0
+    try:
+        for _, field_name, format_spec, conversion in Formatter().parse(template):
+            if field_name is None:
+                continue
+            if field_name != "start_word" or format_spec or conversion is not None:
+                _add_error(
+                    errors,
+                    path,
+                    f"{location} may only use the {{start_word}} placeholder",
+                )
+                return
+            placeholder_count += 1
+        template.format(start_word="example")
+    except (KeyError, ValueError):
+        _add_error(errors, path, f"{location} is a malformed response template")
+        return
+    if placeholder_count != 1:
+        _add_error(
+            errors,
+            path,
+            f"{location} must contain exactly one {{start_word}} placeholder",
+        )
+
+
+def _validate_bot_start_configuration(
+    errors,
+    project_root_path,
+    environment,
+    provider_data,
+):
+    path, data = load_bot_start_configuration(project_root_path, environment)
+    if data is None:
+        if provider_data is not None:
+            _add_error(errors, path, "bot_start.yaml is required")
+        return
+    if not isinstance(data, dict):
+        _add_error(errors, path, "bot_start.yaml must contain a mapping")
+        return
+
+    missing = sorted(BOT_START_REQUIRED_FIELDS - set(data))
+    unexpected = sorted(set(data) - BOT_START_REQUIRED_FIELDS)
+    if missing:
+        _add_error(errors, path, f"bot_start.yaml is missing fields {missing}")
+    if unexpected:
+        _add_error(errors, path, f"bot_start.yaml has unsupported fields {unexpected}")
+    if data.get("environment") != environment:
+        _add_error(errors, path, f"environment must be {environment}")
+    if (
+        not isinstance(data.get("configuration_version"), int)
+        or data.get("configuration_version", 0) < 1
+    ):
+        _add_error(
+            errors,
+            path,
+            "configuration_version must be a positive integer",
+        )
+
+    active_languages = _active_messaging_languages(project_root_path, environment)
+    corpus_catalog = _corpus_catalog(project_root_path, environment)
+    _validate_target(
+        errors,
+        path,
+        "default_target",
+        data.get("default_target"),
+        environment,
+        corpus_catalog,
+        active_languages,
+    )
+
+    start_words = data.get("start_words")
+    if not isinstance(start_words, dict):
+        _add_error(errors, path, "start_words must be a mapping")
+    else:
+        normalized_words = {}
+        for start_word, target in start_words.items():
+            if not isinstance(start_word, str) or not normalize_start_word(start_word):
+                _add_error(errors, path, "start_words keys must be non-empty strings")
+                continue
+            normalized_word = normalize_start_word(start_word)
+            if normalized_word in normalized_words:
+                _add_error(
+                    errors,
+                    path,
+                    f"start_words {start_word!r} and {normalized_words[normalized_word]!r} normalize to the same word",
+                )
+            normalized_words[normalized_word] = start_word
+            _validate_target(
+                errors,
+                path,
+                f"start_words[{start_word!r}]",
+                target,
+                environment,
+                corpus_catalog,
+                active_languages,
+            )
+
+    responses = data.get("unknown_start_word")
+    if not isinstance(responses, dict):
+        _add_error(errors, path, "unknown_start_word must be a mapping")
+        return
+    for language_code in sorted(active_languages):
+        if language_code not in responses:
+            _add_error(
+                errors,
+                path,
+                f"unknown_start_word.{language_code} must be configured",
+            )
+    for language_code, template in responses.items():
+        if not isinstance(language_code, str) or not language_code.strip():
+            _add_error(
+                errors,
+                path,
+                "unknown_start_word language keys must be non-empty strings",
+            )
+            continue
+        _validate_response_template(errors, path, language_code, template)
+
+
 def _provider_lookup(records):
     by_type = _provider_records_by_type(records)
     connections = {
@@ -762,6 +1047,12 @@ def validate_messaging_configuration(project_root_path, environment):
         _validate_provider_cross_references(errors, path, records)
         _validate_callback_not_reused(errors, project_root_path, environment, records)
     _validate_business_routes(errors, project_root_path, environment, records)
+    _validate_bot_start_configuration(
+        errors,
+        project_root_path,
+        environment,
+        data,
+    )
     return dict(errors)
 
 

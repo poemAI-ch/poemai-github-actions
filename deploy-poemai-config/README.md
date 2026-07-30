@@ -9,7 +9,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 - **URL Generation**: Generate test bot URLs for easy access to temporary deployments
 - **Version Management**: Support for version IDs and deployment tracking
 - **Multi-format Support**: Handle both single and multi-document YAML files
-- **Messaging Configuration**: Validate and deploy provider records separately from corpus configuration
+- **Messaging Configuration**: Validate and deploy provider plus global bot-start records separately from corpus configuration
 - **Derived Route Aliases**: Generate direct document-table lookup items from active corpus messaging routes
 
 ## Usage
@@ -18,7 +18,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.2
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
   with:
     environment: 'production'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -29,7 +29,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Temporary Test Bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.2
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -39,11 +39,11 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
     test-bot-url-template: 'https://app.staging.poemai.ch/ui/town_bot/app/{corpus_key}/'
 ```
 
-### Messaging Provider Deployment
+### Messaging Configuration Deployment
 
 ```yaml
-- name: Deploy Messaging Provider Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.8.2
+- name: Deploy Messaging Configuration
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
   with:
     environment: 'staging'
     configuration-scope: 'messaging'
@@ -52,8 +52,17 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 ```
 
 Messaging provider records are read from
-`environments/<environment>/messaging/provider_connections.yaml`. The validator
-requires deterministic Standard SSM `SecureString` parameter names below:
+`environments/<environment>/messaging/provider_connections.yaml`. The global
+default target, normalized named start targets, and localized unknown-word
+template are read from
+`environments/<environment>/messaging/bot_start.yaml`. They are deployed as the
+deterministic `MESSAGING_CONFIGURATION# /
+CONFIGURATION_KEY#BOT_START` record.
+
+The validator resolves every target corpus and case manager, verifies language
+support, rejects duplicate normalized start words, and checks response-template
+placeholders. It also requires deterministic Standard SSM `SecureString`
+parameter names below:
 
 ```text
 /poemai/{environment}/messaging/providers/{provider}/channels/{channel}/callbacks/{callback_id}/credentials/{credential}
@@ -80,7 +89,7 @@ messaging route. Provision credential parameters as Standard-tier
 | `temporary-corpus-key` | Temporary corpus key for test deployments (use 'auto' for auto-generation) | No | - |
 | `temporary-corpus-key-ttl-hours` | TTL in hours for temporary deployments | No | `24` |
 | `test-bot-url-template` | Jinja2 URL template for test bot access | No | - |
-| `configuration-scope` | Deploy `corpus` objects or `messaging` provider records | No | `corpus` |
+| `configuration-scope` | Deploy `corpus` objects or `messaging` provider/global-start records | No | `corpus` |
 
 ## Temporary Deployment Features
 
@@ -105,6 +114,7 @@ project-root/
     staging/
       messaging/
         provider_connections.yaml
+        bot_start.yaml
       corpus_keys/
         BOT_NAME/
           assistant.yaml
@@ -173,6 +183,7 @@ The action provides comprehensive error handling for:
 
 ## Version History
 
+- **v5.9.0**: Add validated global bot-start configuration and deterministic messaging-table deployment
 - **v5.8.2**: Require canonical Standard SSM Parameter Store credential paths
 - **v5.8.1**: Install the DynamoDB SDK required by messaging validation
 - **v5.8.0**: Added messaging provider validation/deployment and derived corpus-route aliases
