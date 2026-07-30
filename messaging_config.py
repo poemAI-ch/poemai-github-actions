@@ -193,6 +193,11 @@ BOT_START_REQUIRED_FIELDS = {
     "unknown_start_word",
 }
 TARGET_REQUIRED_FIELDS = {"corpus_key", "case_manager_id"}
+REQUIRED_MESSAGING_NOTICE_NAMES = (
+    "unsupported_media",
+    "reset_completed",
+    "temporary_failure",
+)
 
 
 def provider_config_path(project_root_path, environment):
@@ -657,7 +662,7 @@ def _validate_target(
         _add_error(errors, path, f"{location} references unknown corpus {corpus_key}")
         return
 
-    _, metadata, case_managers = corpus_entry
+    metadata_path, metadata, case_managers = corpus_entry
     if metadata.get("environment") != environment:
         _add_error(
             errors,
@@ -693,6 +698,23 @@ def _validate_target(
                 path,
                 f"{location} case manager does not support language {language_code}",
             )
+
+    messaging = metadata.get("messaging")
+    notices = messaging.get("notices") if isinstance(messaging, dict) else None
+    for language_code in sorted(required_languages):
+        for notice_name in REQUIRED_MESSAGING_NOTICE_NAMES:
+            notice = notices.get(notice_name) if isinstance(notices, dict) else None
+            if (
+                not isinstance(notice, dict)
+                or not isinstance(notice.get(language_code), str)
+                or not notice.get(language_code).strip()
+            ):
+                _add_error(
+                    errors,
+                    metadata_path,
+                    f"{location} target requires messaging.notices."
+                    f"{notice_name}.{language_code} to be a non-empty string",
+                )
 
 
 def _validate_response_template(errors, path, language_code, template):
@@ -994,11 +1016,7 @@ def _validate_business_routes(errors, project_root_path, environment, records):
                 claimed_destinations[destination_id] = metadata.get("corpus_key")
 
                 language_code = route.get("default_language_code")
-                for notice_name in (
-                    "unsupported_media",
-                    "reset_completed",
-                    "temporary_failure",
-                ):
+                for notice_name in REQUIRED_MESSAGING_NOTICE_NAMES:
                     notice = notices.get(notice_name)
                     if (
                         not isinstance(notice, dict)

@@ -15,6 +15,7 @@ CALLBACK_ID = "0123456789abcdef0123456789abcdef"
 CONNECTION_ID = "meta-whatsapp-poemai-bot-staging"
 DESTINATION_ID = "123456789012345"
 CASE_MANAGER_ID = "f4485650031041918c500c43170225e3"
+SECOND_CASE_MANAGER_ID = "1234567890abcdef1234567890abcdef"
 PARAMETER_PREFIX = "/poemai/staging/messaging/providers/meta/channels/whatsapp"
 
 
@@ -298,6 +299,52 @@ def test_validator_rejects_unknown_bot_start_targets(tmp_path):
         "references unknown case manager unknown-manager" in message
         for message in messages
     )
+
+
+def test_validator_requires_localized_notices_for_each_bot_start_target(tmp_path):
+    _write_valid_project(tmp_path)
+    second_directory = tmp_path / "environments/staging/corpus_keys/SECOND_BOT"
+    second_metadata_path = second_directory / "corpus_metadata.yaml"
+    _write_yaml(
+        second_metadata_path,
+        {
+            "pk": "CORPUS_METADATA#",
+            "sk": "CORPUS_KEY#SECOND_BOT",
+            "corpus_key": "SECOND_BOT",
+            "environment": "staging",
+            "public_bot": True,
+        },
+    )
+    _write_yaml(
+        second_directory / "case_manager.yaml",
+        {
+            "case_manager_id": SECOND_CASE_MANAGER_ID,
+            "corpus_key": "SECOND_BOT",
+            "initial_workspace": {
+                "_default_language_name": "Deutsch",
+                "_language_mapping": {"de": "Deutsch"},
+            },
+        },
+    )
+    path = tmp_path / "environments/staging/messaging/bot_start.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["start_words"]["Second"] = {
+        "corpus_key": "SECOND_BOT",
+        "case_manager_id": SECOND_CASE_MANAGER_ID,
+    }
+    _write_yaml(path, data)
+
+    errors = validate_messaging_configuration(tmp_path, "staging")
+    messages = [error["error"] for error in errors[str(second_metadata_path)]]
+
+    assert messages == [
+        "start_words['Second'] target requires "
+        "messaging.notices.unsupported_media.de to be a non-empty string",
+        "start_words['Second'] target requires "
+        "messaging.notices.reset_completed.de to be a non-empty string",
+        "start_words['Second'] target requires "
+        "messaging.notices.temporary_failure.de to be a non-empty string",
+    ]
 
 
 def test_validator_rejects_duplicate_normalized_start_words(tmp_path):
