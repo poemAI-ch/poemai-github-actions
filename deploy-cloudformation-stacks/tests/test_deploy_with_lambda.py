@@ -4,14 +4,17 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import botocore.exceptions
+import networkx as nx
 import pytest
 import yaml
 from deploy_with_lambda_call import (
     deploy,
+    deploy_stack,
     do_dump,
     do_dump_graph,
     invoke_lambda_with_backoff,
     resolve_version_with_hash_support,
+    validate_deployment_response,
 )
 
 _logger = logging.getLogger(__name__)
@@ -86,7 +89,7 @@ def test_deploy_2(tmpdir):
         )
 
         # Mock the invoke() return value
-        payload_content = '[{"status": "success"}]'
+        payload_content = '[{"stack_name": "test-stack-devops", "status": "success"}]'
         payload_stream = BytesIO(payload_content.encode("utf-8"))
         payload_mock = MagicMock()
         payload_mock.read.return_value = payload_stream.read()
@@ -154,7 +157,7 @@ def test_invoke_lambda_with_backoff_retries_read_timeout():
 
     lambda_client_mock.exceptions.TooManyRequestsException = TooManyRequestsException
 
-    payload_content = '[{"status": "success"}]'
+    payload_content = '[{"stack_name": "test-stack", "status": "success"}]'
     payload_mock = MagicMock()
     payload_mock.read.return_value = payload_content.encode("utf-8")
 
@@ -166,8 +169,9 @@ def test_invoke_lambda_with_backoff_retries_read_timeout():
         {"Payload": payload_mock},
     ]
 
-    with patch("deploy_with_lambda_call.time.sleep") as sleep_mock, patch(
-        "deploy_with_lambda_call.random.uniform", return_value=0
+    with (
+        patch("deploy_with_lambda_call.time.sleep") as sleep_mock,
+        patch("deploy_with_lambda_call.random.uniform", return_value=0),
     ):
         response = invoke_lambda_with_backoff(
             lambda_client_mock,
@@ -178,9 +182,111 @@ def test_invoke_lambda_with_backoff_retries_read_timeout():
             info="test-stack",
         )
 
-    assert response["Payload"] == [{"status": "success"}]
+    assert response["Payload"] == [{"stack_name": "test-stack", "status": "success"}]
     assert lambda_client_mock.invoke.call_count == 2
     sleep_mock.assert_called_once_with(1)
+
+
+def test_validate_deployment_response_success():
+    result = validate_deployment_response(
+        {"Payload": [{"stack_name": "test-stack", "status": "success"}]},
+        "test-stack",
+    )
+
+    assert result == {"stack_name": "test-stack", "status": "success"}
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_message"),
+    [
+        (
+            {
+                "FunctionError": "Unhandled",
+                "Payload": {"errorMessage": "handler crashed"},
+            },
+            "Deployment Lambda failed for stack test-stack",
+        ),
+        ({"Payload": "not json"}, "expected a non-empty list"),
+        ({"Payload": []}, "expected a non-empty list"),
+        (
+            {"Payload": [{"stack_name": "other-stack", "status": "success"}]},
+            "did not return a result for stack test-stack",
+        ),
+        (
+            {
+                "Payload": [
+                    {
+                        "stack_name": "test-stack",
+                        "status": "error",
+                        "error": "Template validation failed",
+                    }
+                ]
+            },
+            "Deployment failed for stack test-stack: Template validation failed",
+        ),
+    ],
+)
+def test_validate_deployment_response_rejects_failed_or_malformed_payloads(
+    response, expected_message
+):
+    with pytest.raises((RuntimeError, ValueError), match=expected_message):
+        validate_deployment_response(response, "test-stack")
+
+
+def test_deploy_stack_rejects_error_before_waiting_for_stack_stability():
+    lambda_client = MagicMock()
+    lambda_client.exceptions = MagicMock()
+    lambda_client.exceptions.TooManyRequestsException = type(
+        "TooManyRequestsException", (Exception,), {}
+    )
+    payload = MagicMock()
+    payload.read.return_value = (
+        b'[{"stack_name": "test-stack", "status": "error", '
+        b'"error": "Template validation failed"}]'
+    )
+    lambda_client.invoke.return_value = {"Payload": payload}
+    message_spec = {
+        "message": {"stack_name": "test-stack"},
+        "message_nr": 0,
+        "total_messages": 1,
+    }
+
+    with patch("deploy_with_lambda_call.wait_for_stack_stable_state") as wait_mock:
+        with pytest.raises(RuntimeError, match="Template validation failed"):
+            deploy_stack(lambda_client, "deployer", message_spec)
+
+    wait_mock.assert_not_called()
+
+
+def test_deploy_stops_before_dependent_generation_after_error():
+    failed = {
+        "message": {"stack_name": "base-stack"},
+        "stack": {"template_file": "base.yaml"},
+    }
+    dependent = {
+        "message": {"stack_name": "dependent-stack"},
+        "stack": {"template_file": "dependent.yaml"},
+    }
+    dependency_graph = nx.DiGraph()
+    dependency_graph.add_edge("dependent-stack", "base-stack")
+
+    with (
+        patch("deploy_with_lambda_call.boto3.client"),
+        patch(
+            "deploy_with_lambda_call.prepare_messages",
+            return_value=([[failed], [dependent]], dependency_graph),
+        ),
+        patch(
+            "deploy_with_lambda_call.deploy_stack",
+            side_effect=RuntimeError("Template validation failed"),
+        ) as deploy_stack_mock,
+    ):
+        with pytest.raises(
+            ValueError, match="dependencies have not been successfully deployed"
+        ):
+            deploy("deployer", {}, "unused.yaml")
+
+    assert deploy_stack_mock.call_count == 1
 
 
 def test_resolve_version_with_hash_support():
@@ -295,9 +401,10 @@ def test_deploy_uses_cloudfront_specific_stable_state_timeout(tmpdir):
     with open(stack_template_file, "w") as f:
         yaml.dump(stack_template, f)
 
-    with patch("deploy_with_lambda_call.boto3") as boto3_mock, patch(
-        "deploy_with_lambda_call.wait_for_stack_stable_state"
-    ) as mock_wait:
+    with (
+        patch("deploy_with_lambda_call.boto3") as boto3_mock,
+        patch("deploy_with_lambda_call.wait_for_stack_stable_state") as mock_wait,
+    ):
         lambda_client_mock = MagicMock()
         boto3_mock.client.return_value = lambda_client_mock
 
@@ -311,7 +418,9 @@ def test_deploy_uses_cloudfront_specific_stable_state_timeout(tmpdir):
         )
 
         payload_mock = MagicMock()
-        payload_mock.read.return_value = b'[{"status": "success"}]'
+        payload_mock.read.return_value = (
+            b'[{"stack_name": "test-cloudfront-stack-devops", "status": "success"}]'
+        )
         lambda_client_mock.invoke.return_value = {"Payload": payload_mock}
         mock_wait.return_value = "UPDATE_COMPLETE"
 
@@ -351,9 +460,10 @@ def test_deploy_uses_explicit_stable_state_timeout_override(tmpdir):
     with open(stack_template_file, "w") as f:
         yaml.dump(stack_template, f)
 
-    with patch("deploy_with_lambda_call.boto3") as boto3_mock, patch(
-        "deploy_with_lambda_call.wait_for_stack_stable_state"
-    ) as mock_wait:
+    with (
+        patch("deploy_with_lambda_call.boto3") as boto3_mock,
+        patch("deploy_with_lambda_call.wait_for_stack_stable_state") as mock_wait,
+    ):
         lambda_client_mock = MagicMock()
         boto3_mock.client.return_value = lambda_client_mock
 
@@ -367,7 +477,9 @@ def test_deploy_uses_explicit_stable_state_timeout_override(tmpdir):
         )
 
         payload_mock = MagicMock()
-        payload_mock.read.return_value = b'[{"status": "success"}]'
+        payload_mock.read.return_value = (
+            b'[{"stack_name": "test-stack-devops", "status": "success"}]'
+        )
         lambda_client_mock.invoke.return_value = {"Payload": payload_mock}
         mock_wait.return_value = "CREATE_COMPLETE"
 
@@ -974,8 +1086,9 @@ def test_override_globals_file_functionality(tmpdir, caplog):
     # Capture stdout to check for override messages
     captured_output = StringIO()
 
-    with patch.object(sys, "argv", test_args), patch.object(
-        sys, "stdout", captured_output
+    with (
+        patch.object(sys, "argv", test_args),
+        patch.object(sys, "stdout", captured_output),
     ):
         from deploy_with_lambda_call import main
 
@@ -1030,7 +1143,7 @@ def test_deploy_fails_with_missing_dependencies(tmpdir):
         )
 
         # Mock successful lambda response for stack-a
-        payload_content = '[{"status": "success"}]'
+        payload_content = '[{"stack_name": "stack-a-development", "status": "success"}]'
         payload_stream = BytesIO(payload_content.encode("utf-8"))
         payload_mock = MagicMock()
         payload_mock.read.return_value = payload_stream.read()
@@ -1095,7 +1208,9 @@ def test_deploy_fails_with_missing_dependencies(tmpdir):
                 raise Exception("Simulated deployment failure for stack-a")
             else:
                 # For other stacks, return success
-                payload_content = '[{"status": "success"}]'
+                payload_content = (
+                    '[{"stack_name": "stack-b-development", "status": "success"}]'
+                )
                 payload_stream = BytesIO(payload_content.encode("utf-8"))
                 payload_mock = MagicMock()
                 payload_mock.read.return_value = payload_stream.read()

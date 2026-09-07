@@ -1240,6 +1240,49 @@ def invoke_lambda_with_backoff(
             raise
 
 
+def validate_deployment_response(response, expected_stack_name):
+    """Validate the synchronous deployer Lambda result for one stack request."""
+    payload = response.get("Payload")
+
+    if response.get("FunctionError"):
+        raise RuntimeError(
+            f"Deployment Lambda failed for stack {expected_stack_name}: {payload!r}"
+        )
+
+    if not isinstance(payload, list) or not payload:
+        raise ValueError(
+            f"Deployment Lambda returned an invalid result for stack {expected_stack_name}: "
+            f"expected a non-empty list, got {payload!r}"
+        )
+
+    if len(payload) != 1 or not isinstance(payload[0], dict):
+        raise ValueError(
+            f"Deployment Lambda returned an invalid result for stack {expected_stack_name}: "
+            f"expected exactly one result object, got {payload!r}"
+        )
+
+    result = payload[0]
+    if result.get("stack_name") != expected_stack_name:
+        raise ValueError(
+            f"Deployment Lambda did not return a result for stack {expected_stack_name}: "
+            f"got {result!r}"
+        )
+
+    status = result.get("status")
+    if status == "error":
+        raise RuntimeError(
+            f"Deployment failed for stack {expected_stack_name}: "
+            f"{result.get('error', 'no error reason returned')}"
+        )
+    if status != "success":
+        raise ValueError(
+            f"Deployment Lambda returned an invalid status for stack {expected_stack_name}: "
+            f"{result!r}"
+        )
+
+    return result
+
+
 def determine_stack_stable_state_timeout_seconds(message_spec):
     stack = message_spec.get("stack", {})
     stack_name = message_spec["message"]["stack_name"]
@@ -1331,6 +1374,7 @@ def deploy_stack(lambda_client, lambda_function_name, message_spec):
         retval = invoke_lambda_with_backoff(
             lambda_client, lambda_function_name, lambda_event, info=stack_name
         )
+        validate_deployment_response(retval, stack_name)
 
         state = wait_for_stack_stable_state(
             stack_name,
@@ -1427,15 +1471,7 @@ def deploy(lambda_function_name, config, config_file, stack_name=None):
                     _logger.info(
                         f"Lambda invoked for {message_spec['message']['stack_name']} using template {message_spec['stack']['template_file']}: {log_text}"
                     )
-                    status_texts = [pl.get("status") for pl in response_payload]
-
-                    if any([status_text == "error" for status_text in status_texts]):
-                        _logger.error(
-                            f"Failed to deploy {message_spec['message']['stack_name']} using template {message_spec['stack']['template_file']}"
-                        )
-                        failed_stacks.append(message_spec["message"]["stack_name"])
-                    else:
-                        successful_stacks.add(message_spec["message"]["stack_name"])
+                    successful_stacks.add(message_spec["message"]["stack_name"])
 
                     _logger.info(
                         f"Still in process: {stack_names_in_process - successful_stacks  - set(failed_stacks)}"
