@@ -4,14 +4,44 @@ import logging
 import sys
 from collections import defaultdict
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import jsonschema
 import yaml
+from packaging.version import InvalidVersion, Version
 from poemai_utils.enum_utils import add_enum_repr
 from poemai_utils.openai.openai_model import OPENAI_MODEL
 
 _logger = logging.getLogger(__name__)
+REQUIRED_POEMAI_UTILS_VERSION = "3.3.0"
+
+
+def check_poemai_utils_version():
+    """Require at least the model catalog version pinned by this action."""
+    upgrade_command = (
+        f"{sys.executable} -m pip install --upgrade "
+        f'"poemai-utils=={REQUIRED_POEMAI_UTILS_VERSION}"'
+    )
+    try:
+        installed_version = version("poemai-utils")
+    except PackageNotFoundError:
+        raise ValueError(
+            f"poemai-utils is not installed. Run: {upgrade_command}"
+        ) from None
+    try:
+        outdated = Version(installed_version) < Version(REQUIRED_POEMAI_UTILS_VERSION)
+    except InvalidVersion:
+        raise ValueError(
+            f"Cannot verify poemai-utils version {installed_version!r}. "
+            f"Run: {upgrade_command}"
+        ) from None
+    if outdated:
+        raise ValueError(
+            f"Installed poemai-utils {installed_version} is too old; this validator "
+            f"requires {REQUIRED_POEMAI_UTILS_VERSION} or newer. Its model catalog "
+            f"may reject supported models. Run: {upgrade_command}"
+        )
 
 
 def pk_sk_fields(pk, sk):
@@ -838,6 +868,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    try:
+        check_poemai_utils_version()
+    except ValueError as exc:
+        _logger.error("%s", exc)
+        raise SystemExit(1) from None
 
     root_path = Path(args.project_root_path).absolute()
 

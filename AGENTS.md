@@ -34,7 +34,7 @@ git tag --list | sort -V
 ### Action Usage
 
 Users can reference specific versions:
-- `uses: poemAI-ch/poemai-github-actions/action-name@v5.9.3` (specific version)
+- `uses: poemAI-ch/poemai-github-actions/action-name@v5.9.4` (specific version)
 - `uses: poemAI-ch/poemai-github-actions/action-name@v3` (latest v3.x.x)
 - `uses: poemAI-ch/poemai-github-actions/action-name@main` (latest development)
 
