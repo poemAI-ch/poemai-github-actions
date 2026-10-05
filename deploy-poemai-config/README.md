@@ -18,7 +18,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.3
   with:
     environment: 'production'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -29,7 +29,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Temporary Test Bot
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.3
   with:
     environment: 'staging'
     lambda-function-name: 'poemai-config-deployer-lambda'
@@ -43,7 +43,7 @@ This GitHub Action deploys poeMAI configuration files to AWS Lambda using the po
 
 ```yaml
 - name: Deploy Messaging Configuration
-  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.0
+  uses: poemAI-ch/poemai-github-actions/deploy-poemai-config@v5.9.3
   with:
     environment: 'staging'
     configuration-scope: 'messaging'

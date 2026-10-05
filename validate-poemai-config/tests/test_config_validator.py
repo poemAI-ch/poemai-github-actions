@@ -4,6 +4,8 @@ from collections import defaultdict
 from enum import Enum
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 if "jsonschema" not in sys.modules:
     sys.modules["jsonschema"] = types.SimpleNamespace(
@@ -30,6 +32,7 @@ except ImportError:
     sys.modules["poemai_utils.openai.openai_model"] = openai_model_module
 
 from config_validator import calc_object_directory, validate
+from poemai_utils.openai.openai_model import OPENAI_MODEL
 
 
 def _assistant_object(model_name):
@@ -95,6 +98,28 @@ def _run_assistant_validation(assistant_obj, corpus_metadata_obj):
         assistant_case_manager_graph=assistant_case_manager_graph,
     )
     return validation_errors
+
+
+@pytest.mark.parametrize("model", list(OPENAI_MODEL))
+def test_assistant_model_name_accepts_current_model_catalog(model):
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object(model.name),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" not in errors
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["GPT_5_6", "GPT_5_6_LUNA", "GPT_5_6_TERRA", "GPT_5_6_SOL", "GPT_6_ASTRA"],
+)
+def test_assistant_model_name_accepts_recent_models(model_name):
+    assert model_name in OPENAI_MODEL.__members__
+    errors = _run_assistant_validation(
+        assistant_obj=_assistant_object(model_name),
+        corpus_metadata_obj=_corpus_metadata_object(),
+    )
+    assert "assistant.yaml" not in errors
 
 
 def test_assistant_model_name_allows_non_openai_name_with_custom_api_url():
