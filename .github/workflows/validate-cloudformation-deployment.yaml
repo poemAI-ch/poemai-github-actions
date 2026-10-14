@@ -1,0 +1,21 @@
+name: Validate CloudFormation deployment action
+on:
+  pull_request:
+    paths:
+      - 'deploy-cloudformation-stacks/**'
+      - '.github/workflows/validate-cloudformation-deployment.yaml'
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      PYTHONPATH: deploy-cloudformation-stacks
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install pytest boto3 pyyaml networkx
+      - run: python -m pytest deploy-cloudformation-stacks/tests -q
