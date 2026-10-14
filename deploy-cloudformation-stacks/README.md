@@ -79,3 +79,18 @@ python -m pytest tests/ -v
 ## Version History
 
 - **v1.0.0**: Initial release with hash-based lambda version support
+
+## Invocation and operation timeouts
+
+Synchronous Lambda connections allow up to 930 seconds, covering Lambda's maximum
+900-second execution time. Automatic SDK invocation retries are disabled. A Lambda
+throttling response can be retried because the invocation was rejected; a read
+timeout has an unknown outcome and fails the build without invoking the deployer
+again. Inspect the stack before rerunning after this error.
+
+The action validates deployer responses, including function errors and explicit
+stack errors, before polling CloudFormation. An accepted response with
+`operation_pending: true` means CloudFormation is still working: the action polls
+its final state without invoking the deployer again. Polling uses bounded API
+calls and a monotonic deadline. Individual stacks can configure
+`stable_state_timeout_seconds` for long custom resource operations.

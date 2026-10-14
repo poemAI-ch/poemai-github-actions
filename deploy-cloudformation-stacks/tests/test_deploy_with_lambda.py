@@ -148,43 +148,49 @@ def test_deploy_2(tmpdir):
         do_dump_graph(config, stacks_file.as_posix())
 
 
-def test_invoke_lambda_with_backoff_retries_read_timeout():
-    lambda_client_mock = MagicMock()
-    lambda_client_mock.exceptions = MagicMock()
+def test_invoke_read_timeout_is_not_replayed():
+    client = MagicMock()
+    client.exceptions.TooManyRequestsException = type("Throttled", (Exception,), {})
+    client.invoke.side_effect = botocore.exceptions.ReadTimeoutError(
+        endpoint_url="https://lambda.test", error="timeout"
+    )
+    with patch("deploy_with_lambda_call.time.sleep") as sleep:
+        with pytest.raises(RuntimeError, match="Not invoking it again"):
+            invoke_lambda_with_backoff(client, "deployer", {}, info="test-stack")
+    client.invoke.assert_called_once()
+    sleep.assert_not_called()
 
-    class TooManyRequestsException(Exception):
-        pass
 
-    lambda_client_mock.exceptions.TooManyRequestsException = TooManyRequestsException
+def test_invoke_throttling_is_safe_to_retry():
+    import io
 
-    payload_content = '[{"stack_name": "test-stack", "status": "success"}]'
-    payload_mock = MagicMock()
-    payload_mock.read.return_value = payload_content.encode("utf-8")
-
-    lambda_client_mock.invoke.side_effect = [
-        botocore.exceptions.ReadTimeoutError(
-            endpoint_url="https://lambda.eu-central-2.amazonaws.com/test",
-            error="timed out",
-        ),
-        {"Payload": payload_mock},
-    ]
-
+    client = MagicMock()
+    error = type("Throttled", (Exception,), {})
+    client.exceptions.TooManyRequestsException = error
+    body = io.BytesIO(b'[{"stack_name":"test-stack","status":"success"}]')
+    client.invoke.side_effect = [error(), {"Payload": body}]
     with (
-        patch("deploy_with_lambda_call.time.sleep") as sleep_mock,
+        patch("deploy_with_lambda_call.time.sleep"),
         patch("deploy_with_lambda_call.random.uniform", return_value=0),
     ):
-        response = invoke_lambda_with_backoff(
-            lambda_client_mock,
-            "test-function",
-            {"hello": "world"},
-            max_attempts=3,
-            initial_delay=1,
-            info="test-stack",
-        )
+        result = invoke_lambda_with_backoff(client, "deployer", {})
+    assert result["Payload"][0]["status"] == "success"
+    assert client.invoke.call_count == 2
+    assert body.closed
 
-    assert response["Payload"] == [{"stack_name": "test-stack", "status": "success"}]
-    assert lambda_client_mock.invoke.call_count == 2
-    sleep_mock.assert_called_once_with(1)
+
+def test_partial_response_timeout_is_not_replayed_and_closes_stream():
+    client = MagicMock()
+    client.exceptions.TooManyRequestsException = type("Throttled", (Exception,), {})
+    body = MagicMock()
+    body.read.side_effect = botocore.exceptions.ReadTimeoutError(
+        endpoint_url="https://lambda.test", error="timeout"
+    )
+    client.invoke.return_value = {"Payload": body}
+    with pytest.raises(RuntimeError, match="result is unknown"):
+        invoke_lambda_with_backoff(client, "deployer", {})
+    client.invoke.assert_called_once()
+    body.close.assert_called_once()
 
 
 def test_validate_deployment_response_success():
@@ -1525,3 +1531,85 @@ def test_fully_disabled_chain_is_allowed(tmpdir):
         pytest.fail(
             "Should not raise ValueError when all stacks in dependency chain are disabled"
         )
+
+
+def test_deploy_client_allows_long_invoke_without_automatic_replay():
+    with (
+        patch("deploy_with_lambda_call.boto3.client") as factory,
+        patch(
+            "deploy_with_lambda_call.prepare_messages", return_value=([], nx.DiGraph())
+        ),
+    ):
+        deploy("deployer", {}, "unused.yaml")
+    config = factory.call_args.kwargs["config"]
+    assert config.read_timeout == 930
+    assert config.retries["total_max_attempts"] == 1
+
+
+def test_pending_operation_is_polled_without_reinvocation():
+    import io
+
+    client = MagicMock()
+    client.exceptions.TooManyRequestsException = type("Throttled", (Exception,), {})
+    client.invoke.return_value = {
+        "Payload": io.BytesIO(
+            b'[{"stack_name":"test-stack","status":"success","operation_pending":true}]'
+        )
+    }
+    spec = {
+        "message": {"stack_name": "test-stack"},
+        "message_nr": 0,
+        "total_messages": 1,
+        "stack": {},
+    }
+    with patch(
+        "deploy_with_lambda_call.wait_for_stack_stable_state",
+        return_value="CREATE_COMPLETE",
+    ) as waiter:
+        deploy_stack(client, "deployer", spec)
+    client.invoke.assert_called_once()
+    waiter.assert_called_once()
+
+
+def test_stack_polling_honours_elapsed_deadline():
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    client.describe_stacks.return_value = {
+        "Stacks": [{"StackStatus": "CREATE_IN_PROGRESS"}]
+    }
+    with (
+        patch("deploy_with_lambda_call.boto3.client", return_value=client),
+        patch("deploy_with_lambda_call.time.monotonic", side_effect=[0, 0, 11, 11]),
+        patch("deploy_with_lambda_call.time.sleep"),
+    ):
+        with pytest.raises(ValueError, match="never reached stable state"):
+            wait_for_stack_stable_state(
+                "test-stack", timeout_seconds=10, poll_interval_seconds=1
+            )
+    client.describe_stacks.assert_called_once()
+
+
+def test_stack_polling_terminal_failure_does_not_invoke_again():
+    import io
+
+    client = MagicMock()
+    client.exceptions.TooManyRequestsException = type("Throttled", (Exception,), {})
+    client.invoke.return_value = {
+        "Payload": io.BytesIO(
+            b'[{"stack_name":"test-stack","status":"success","operation_pending":true}]'
+        )
+    }
+    spec = {
+        "message": {"stack_name": "test-stack"},
+        "message_nr": 0,
+        "total_messages": 1,
+        "stack": {},
+    }
+    with patch(
+        "deploy_with_lambda_call.wait_for_stack_stable_state",
+        side_effect=ValueError("ROLLBACK_COMPLETE"),
+    ):
+        with pytest.raises(ValueError, match="ROLLBACK_COMPLETE"):
+            deploy_stack(client, "deployer", spec)
+    client.invoke.assert_called_once()

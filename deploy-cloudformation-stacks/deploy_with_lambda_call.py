@@ -18,6 +18,7 @@ import boto3
 import botocore.exceptions
 import networkx as nx
 import yaml
+from botocore.config import Config
 
 _logger = logging.getLogger(__name__)
 
@@ -1204,9 +1205,11 @@ def invoke_lambda_with_backoff(
                 Payload=json.dumps(payload),
             )
             # Read the payload from the response
-            response_payload = (
-                response["Payload"].read().decode("utf-8")
-            )  # Decoding from bytes to string
+            body = response["Payload"]
+            try:
+                response_payload = body.read().decode("utf-8")
+            finally:
+                body.close()
             try:
                 _logger.info(f"Response payload: {response_payload}")
                 response_payload = json.loads(
@@ -1219,10 +1222,12 @@ def invoke_lambda_with_backoff(
                 response_payload  # Replace the StreamingBody with the actual content
             )
             return response
-        except (
-            lambda_client.exceptions.TooManyRequestsException,
-            botocore.exceptions.ReadTimeoutError,
-        ) as e:
+        except botocore.exceptions.ReadTimeoutError as e:
+            raise RuntimeError(
+                f"Invocation result is unknown{info_text}; the deployment Lambda may still be running. "
+                "Not invoking it again. Inspect the stack state before retrying the build."
+            ) from e
+        except lambda_client.exceptions.TooManyRequestsException as e:
             if attempt < max_attempts - 1:
                 sleep_time = initial_delay * (2**attempt) + random.uniform(0, 1)
                 time.sleep(sleep_time)
@@ -1321,11 +1326,22 @@ def wait_for_stack_stable_state(
         f"(timeout={timeout_seconds}s, poll_interval={poll_interval_seconds}s)"
     )
 
-    cf_client = boto3.client("cloudformation", region_name=region_to_use)
+    cf_client = boto3.client(
+        "cloudformation",
+        region_name=region_to_use,
+        config=Config(
+            connect_timeout=3,
+            read_timeout=10,
+            retries={"mode": "standard", "total_max_attempts": 2},
+        ),
+    )
 
     num_retries = max(1, math.ceil(timeout_seconds / poll_interval_seconds))
     stack_status = None
+    deadline = time.monotonic() + timeout_seconds
     for _ in range(num_retries):
+        if time.monotonic() >= deadline:
+            break
         try:
             stack_data = cf_client.describe_stacks(StackName=stack_name)
             stack_status = stack_data["Stacks"][0]["StackStatus"]
@@ -1346,7 +1362,7 @@ def wait_for_stack_stable_state(
             _logger.info(
                 f"Stack status of {stack_name} is still in {stack_data['Stacks'][0]['StackStatus']}, waiting...."
             )
-            time.sleep(poll_interval_seconds)
+            time.sleep(min(poll_interval_seconds, max(0, deadline - time.monotonic())))
         except Exception as e:
             _logger.error(
                 f"An error occurred for stack {stack_name} {str(e)}", exc_info=True
@@ -1392,7 +1408,15 @@ def deploy_stack(lambda_client, lambda_function_name, message_spec):
 
 
 def deploy(lambda_function_name, config, config_file, stack_name=None):
-    lambda_client = boto3.client("lambda", region_name="eu-central-2")
+    lambda_client = boto3.client(
+        "lambda",
+        region_name="eu-central-2",
+        config=Config(
+            connect_timeout=5,
+            read_timeout=930,
+            retries={"mode": "standard", "total_max_attempts": 1},
+        ),
+    )
     message_generations, dependency_graph = prepare_messages(config, config_file)
 
     total_messages = sum([len(mg) for mg in message_generations])
