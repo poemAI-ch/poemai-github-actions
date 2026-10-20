@@ -11,6 +11,9 @@ from pathlib import Path
 import boto3
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from corpus_assets import config_files, prepare_corpus_assets
+
 _logger = logging.getLogger(__name__)
 
 
@@ -161,6 +164,7 @@ def gather_json_representations(
     environment,
     project_root_path=".",
     include_messaging_aliases=True,
+    asset_plan=None,
 ):
     """
     Gather all json representations of the configuration files
@@ -173,15 +177,15 @@ def gather_json_representations(
         / "corpus_keys"
     )
 
-    # traverse the directory tree and look for all yaml files
+    asset_plan = asset_plan or prepare_corpus_assets(path, environment)
 
     all_objects = []
-    for file in list(path.rglob("*.yaml")) + list(path.rglob("*.yml")):
+    for file in config_files(path):
         with open(file, "r") as f:
             had_error = False
             try:
                 data = yaml.safe_load(f)
-                all_objects.append(data)
+                all_objects.append(asset_plan.resolve(data, file))
             except yaml.composer.ComposerError as e:
                 had_error = True
 
@@ -189,7 +193,7 @@ def gather_json_representations(
                 # try loading as multi-document yaml
                 f.seek(0)
                 for i, doc in enumerate(yaml.safe_load_all(f)):
-                    all_objects.append(doc)
+                    all_objects.append(asset_plan.resolve(doc, file))
                     _logger.info(
                         f"Loaded document {i} from {file}:\n{json.dumps(doc, indent=2, ensure_ascii=False)}\n"
                     )
@@ -208,7 +212,7 @@ def gather_json_representations(
     return all_objects
 
 
-if __name__ == "__main__":
+def main():
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(
         description="Deploy configuration with lambda call"
@@ -297,6 +301,7 @@ if __name__ == "__main__":
             f"Standard deployment: Using '{args.environment}' environment for both source and target"
         )
 
+    asset_plan = None
     if args.configuration_scope == "messaging":
         if temporary_corpus_key:
             parser.error("temporary corpus keys cannot be used for messaging config")
@@ -313,10 +318,18 @@ if __name__ == "__main__":
             "Prepared %s messaging configuration records", len(objects_to_load)
         )
     else:
+        asset_plan = prepare_corpus_assets(
+            Path(args.project_root_path)
+            / "environments"
+            / args.environment
+            / "corpus_keys",
+            args.environment,
+        )
         objects_to_load = gather_json_representations(
             args.environment,
             args.project_root_path,
             include_messaging_aliases=not temporary_corpus_key,
+            asset_plan=asset_plan,
         )
 
     # Apply temporary corpus key transformation if specified
@@ -405,6 +418,10 @@ if __name__ == "__main__":
         "poemai-environment": target_environment,
     }
 
+    # Publish every validated asset before any configuration can reference it.
+    if asset_plan and asset_plan.assets:
+        asset_plan.publish(boto3.client("s3", region_name="eu-central-2"))
+
     # Create a Lambda client
     lambda_client = boto3.client("lambda")
 
@@ -443,3 +460,7 @@ if __name__ == "__main__":
     except Exception as e:
         _logger.exception(f"Failed to invoke lambda function: {e}", exc_info=e)
         exit(1)
+
+
+if __name__ == "__main__":
+    main()

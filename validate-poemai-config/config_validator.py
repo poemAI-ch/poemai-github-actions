@@ -13,6 +13,9 @@ from packaging.version import InvalidVersion, Version
 from poemai_utils.enum_utils import add_enum_repr
 from poemai_utils.openai.openai_model import OPENAI_MODEL
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from corpus_assets import config_files, prepare_corpus_assets
+
 _logger = logging.getLogger(__name__)
 REQUIRED_POEMAI_UTILS_VERSION = "3.3.0"
 
@@ -614,11 +617,16 @@ def validate_files(project_root_path, environment):
 
     _logger.info(f"Validating files in {path}")
 
-    # traverse the directory tree and look for all yaml files
+    try:
+        prepare_corpus_assets(path, environment)
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        validation_errors[str(path)].append({"error": str(exc)})
+
+    # traverse configuration only; assets are validated separately
 
     all_objects = []
     all_objects_with_file = []
-    for file in list(path.rglob("*.yaml")) + list(path.rglob("*.yml")):
+    for file in config_files(path):
         file_identifier = file.as_posix()
 
         try:

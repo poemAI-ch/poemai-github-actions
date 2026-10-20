@@ -194,3 +194,30 @@ The action provides comprehensive error handling for:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+# Public corpus images
+
+The corpus deployment action supports public images stored under each corpus's
+`assets/` directory in staging and production. The shared `corpus_assets.py`
+helper validates supported image files and resolves `assets/...` references in
+`bot_logo_url`, `chat_title_image_url`, and
+`ui_settings.case_manager.case_manager_welcome_image_url`.
+
+All assets are validated before any upload, then uploaded to
+`poemai-assets/config/<source-environment>/corpus_keys/<source-corpus>/assets/<sha256>/<relative-filename>`
+before the config-deployer Lambda is invoked. Configuration payloads contain
+regional S3 HTTPS URLs; checked-in YAML is unchanged. Content-based keys and
+immutable cache headers make image updates and rollbacks deterministic. Old
+objects are retained. Existing absolute URLs are preserved.
+
+The caller's AWS role needs `s3:PutObject` for the applicable corpus prefixes.
+The bucket must already allow public reads; uploads do not set ACLs. Messaging
+configuration does not publish corpus assets. Temporary and cross-deployments
+resolve images before changing corpus/environment identifiers, preserving their
+source namespace. Development supports existing URLs but rejects relative asset
+references and assets directories containing images.
+
+Supported extensions: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.ico`,
+`.avif` (case insensitive). Nested directories work; symlinks, unsupported files,
+missing images, traversal, and references with query strings/fragments fail
+validation. Files beneath assets directories never enter YAML config discovery.
