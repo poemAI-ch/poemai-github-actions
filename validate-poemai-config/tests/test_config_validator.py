@@ -255,3 +255,37 @@ def test_tool_output_rendering_accepts_explicit_raw_opt_in():
         corpus_metadata_obj=_corpus_metadata_object(),
     )
     assert "assistant.yaml" not in errors
+
+
+@pytest.mark.parametrize(
+    "policy,valid",
+    [
+        (None, False),
+        ({}, False),
+        ({"enabled": True, "inactive_after_days": 60}, True),
+        ({"enabled": False, "inactive_after_days": 60}, True),
+        ({"enabled": "true", "inactive_after_days": 60}, False),
+        ({"enabled": True, "inactive_after_days": True}, False),
+        ({"enabled": True, "inactive_after_days": 0}, False),
+        ({"enabled": True, "inactive_after_days": -1}, False),
+        ({"enabled": True, "inactive_after_days": 1.5}, False),
+        ({"enabled": True, "inactive_after_days": 60, "bucket": "no"}, False),
+    ],
+)
+def test_managed_case_archiving_policy(policy, valid):
+    obj = {
+        "pk": "CORPUS_METADATA#",
+        "sk": "CORPUS_KEY#TEST",
+        "corpus_key": "TEST",
+        "managed_case_archiving": policy,
+        "summarizer_model_name": "GPT_4_1",
+        "openai_project_account_name": "default",
+    }
+    errors = defaultdict(list)
+    validate(obj, "metadata.yaml", {}, {"TEST"}, errors, defaultdict(list), {})
+    archive_errors = [
+        error
+        for error in errors["metadata.yaml"]
+        if "managed_case_archiving" in error["error"]
+    ]
+    assert bool(archive_errors) == (not valid)

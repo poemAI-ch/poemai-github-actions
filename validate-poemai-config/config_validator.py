@@ -439,6 +439,27 @@ def validate(
                     )
 
     if obj_type == ObjectType.CORPUS_METADATA:
+        if "managed_case_archiving" in obj:
+            policy = obj["managed_case_archiving"]
+            if not isinstance(policy, dict) or set(policy) != {
+                "enabled",
+                "inactive_after_days",
+            }:
+                validation_errors[filename].append(
+                    {
+                        "error": "managed_case_archiving must contain only enabled and inactive_after_days"
+                    }
+                )
+            elif (
+                type(policy["enabled"]) is not bool
+                or type(policy["inactive_after_days"]) is not int
+                or policy["inactive_after_days"] <= 0
+            ):
+                validation_errors[filename].append(
+                    {
+                        "error": "managed_case_archiving requires boolean enabled and a positive integer inactive_after_days"
+                    }
+                )
         if "summarizer_model_name" not in obj:
             validation_errors[filename].append(
                 {
