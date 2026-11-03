@@ -2,7 +2,6 @@ import argparse
 import copy
 import json
 import logging
-import math
 import os
 import random
 import sys
@@ -1320,6 +1319,8 @@ def wait_for_stack_stable_state(
     timeout_seconds=DEFAULT_STACK_STABLE_STATE_TIMEOUT_SECONDS,
     poll_interval_seconds=STACK_STABLE_STATE_POLL_INTERVAL_SECONDS,
 ):
+    if timeout_seconds <= 0 or poll_interval_seconds <= 0:
+        raise ValueError("Stack wait timeout and poll interval must be positive")
     region_to_use = region or "eu-central-2"
     _logger.info(
         f"Waiting for stack {stack_name} to reach stable state in {region_to_use} "
@@ -1336,41 +1337,60 @@ def wait_for_stack_stable_state(
         ),
     )
 
-    num_retries = max(1, math.ceil(timeout_seconds / poll_interval_seconds))
     stack_status = None
     deadline = time.monotonic() + timeout_seconds
-    for _ in range(num_retries):
-        if time.monotonic() >= deadline:
-            break
+    throttle_delay = 1
+    last_poll_error = None
+    while time.monotonic() < deadline:
         try:
             stack_data = cf_client.describe_stacks(StackName=stack_name)
-            stack_status = stack_data["Stacks"][0]["StackStatus"]
-            if (
-                stack_status == "UPDATE_COMPLETE"
-                or stack_data["Stacks"][0]["StackStatus"] == "CREATE_COMPLETE"
-            ):
-                return stack_status
-            elif stack_status in [
-                "ROLLBACK_COMPLETE",
-                "CREATE_FAILED",
-                "ROLLBACK_FAILED",
-                "UPDATE_ROLLBACK_FAILED",
-                "UPDATE_ROLLBACK_COMPLETE",
-            ]:
-                raise ValueError(f"Stack {stack_name} in error state")
+        except botocore.exceptions.ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code not in {
+                "Throttling",
+                "ThrottlingException",
+                "RequestLimitExceeded",
+                "TooManyRequestsException",
+            }:
+                raise
+            last_poll_error = exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            delay = min(random.uniform(throttle_delay / 2, throttle_delay), remaining)
+            _logger.warning(
+                "CloudFormation status read throttled for %s (%s); retrying in %.2fs",
+                stack_name,
+                code,
+                delay,
+            )
+            time.sleep(delay)
+            throttle_delay = min(throttle_delay * 2, 30)
+            continue
 
-            _logger.info(
-                f"Stack status of {stack_name} is still in {stack_data['Stacks'][0]['StackStatus']}, waiting...."
-            )
-            time.sleep(min(poll_interval_seconds, max(0, deadline - time.monotonic())))
-        except Exception as e:
-            _logger.error(
-                f"An error occurred for stack {stack_name} {str(e)}", exc_info=True
-            )
-            raise
+        throttle_delay = 1
+        last_poll_error = None
+        stack_status = stack_data["Stacks"][0]["StackStatus"]
+        if stack_status in {"UPDATE_COMPLETE", "CREATE_COMPLETE"}:
+            return stack_status
+        if stack_status in {
+            "ROLLBACK_COMPLETE",
+            "CREATE_FAILED",
+            "ROLLBACK_FAILED",
+            "UPDATE_ROLLBACK_FAILED",
+            "UPDATE_ROLLBACK_COMPLETE",
+        }:
+            raise ValueError(f"Stack {stack_name} in error state {stack_status}")
+
+        _logger.info(
+            f"Stack status of {stack_name} is still in {stack_status}, waiting...."
+        )
+        time.sleep(min(poll_interval_seconds, max(0, deadline - time.monotonic())))
 
     _logger.error(f"Stack never reached stable state, is in state {stack_status}")
-    raise ValueError(f"Stack never reached stable state, is in state {stack_status}")
+    raise ValueError(
+        f"Stack never reached stable state, is in state {stack_status}"
+    ) from last_poll_error
 
 
 def deploy_stack(lambda_client, lambda_function_name, message_spec):

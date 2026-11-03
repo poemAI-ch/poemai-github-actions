@@ -1,6 +1,7 @@
 import logging
 from io import BytesIO, StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import botocore.exceptions
@@ -1613,3 +1614,152 @@ def test_stack_polling_terminal_failure_does_not_invoke_again():
         with pytest.raises(ValueError, match="ROLLBACK_COMPLETE"):
             deploy_stack(client, "deployer", spec)
     client.invoke.assert_called_once()
+
+
+@pytest.fixture
+def polling_clock(monkeypatch):
+    import deploy_with_lambda_call as module
+
+    clock = SimpleNamespace(now=0)
+    clock.monotonic = lambda: clock.now
+    clock.sleep = MagicMock(
+        side_effect=lambda seconds: setattr(clock, "now", clock.now + seconds)
+    )
+    monkeypatch.setattr(module, "time", clock)
+    monkeypatch.setattr(module.random, "uniform", lambda low, high: high)
+    return clock
+
+
+def polling_error(code):
+    return botocore.exceptions.ClientError(
+        {"Error": {"Code": code, "Message": "Status read failed"}}, "DescribeStacks"
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "Throttling",
+        "ThrottlingException",
+        "RequestLimitExceeded",
+        "TooManyRequestsException",
+    ],
+)
+def test_stack_polling_recovers_from_throttling_with_backoff(polling_clock, code):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    client.describe_stacks.side_effect = [
+        polling_error(code),
+        polling_error(code),
+        {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]},
+    ]
+    with patch("deploy_with_lambda_call.boto3.client", return_value=client):
+        assert (
+            wait_for_stack_stable_state(
+                "test-stack", timeout_seconds=10, poll_interval_seconds=10
+            )
+            == "UPDATE_COMPLETE"
+        )
+    assert client.describe_stacks.call_count == 3
+    assert [c.args[0] for c in polling_clock.sleep.call_args_list] == [1, 2]
+
+
+def test_persistent_throttling_is_capped_by_elapsed_deadline(polling_clock):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    error = polling_error("Throttling")
+    client.describe_stacks.side_effect = error
+    with patch("deploy_with_lambda_call.boto3.client", return_value=client):
+        with pytest.raises(ValueError, match="never reached stable state") as caught:
+            wait_for_stack_stable_state("test-stack", timeout_seconds=90)
+    assert caught.value.__cause__ is error
+    delays = [c.args[0] for c in polling_clock.sleep.call_args_list]
+    assert delays == [1, 2, 4, 8, 16, 30, 29]
+    assert polling_clock.now == 90
+    assert client.describe_stacks.call_count == len(delays)
+
+
+def test_successful_status_read_resets_throttle_backoff(polling_clock):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    client.describe_stacks.side_effect = [
+        polling_error("Throttling"),
+        polling_error("Throttling"),
+        {"Stacks": [{"StackStatus": "UPDATE_IN_PROGRESS"}]},
+        polling_error("Throttling"),
+        {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]},
+    ]
+    with patch("deploy_with_lambda_call.boto3.client", return_value=client):
+        assert (
+            wait_for_stack_stable_state("test-stack", timeout_seconds=30)
+            == "UPDATE_COMPLETE"
+        )
+    assert [c.args[0] for c in polling_clock.sleep.call_args_list] == [1, 2, 10, 1]
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "ValidationError"])
+def test_stack_polling_does_not_retry_permanent_errors(polling_clock, code):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    error = polling_error(code)
+    client.describe_stacks.side_effect = error
+    with patch("deploy_with_lambda_call.boto3.client", return_value=client):
+        with pytest.raises(botocore.exceptions.ClientError) as caught:
+            wait_for_stack_stable_state("test-stack")
+    assert caught.value is error
+    client.describe_stacks.assert_called_once()
+    polling_clock.sleep.assert_not_called()
+
+
+def test_throttled_status_reads_do_not_repeat_deployment_lambda(polling_clock):
+    import io
+
+    client, cf_client = MagicMock(), MagicMock()
+    client.invoke.return_value = {
+        "Payload": io.BytesIO(b'[{"stack_name":"test-stack","status":"success"}]')
+    }
+    cf_client.describe_stacks.side_effect = [
+        polling_error("Throttling"),
+        {"Stacks": [{"StackStatus": "CREATE_COMPLETE"}]},
+    ]
+    spec = {
+        "message": {"stack_name": "test-stack"},
+        "message_nr": 0,
+        "total_messages": 1,
+        "stack": {},
+    }
+    with patch("deploy_with_lambda_call.boto3.client", return_value=cf_client):
+        deploy_stack(client, "deployer", spec)
+    client.invoke.assert_called_once()
+    assert cf_client.describe_stacks.call_count == 2
+
+
+def test_terminal_stack_failure_after_throttle_is_not_retried(polling_clock):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    client = MagicMock()
+    client.describe_stacks.side_effect = [
+        polling_error("Throttling"),
+        {"Stacks": [{"StackStatus": "UPDATE_ROLLBACK_COMPLETE"}]},
+    ]
+    with patch("deploy_with_lambda_call.boto3.client", return_value=client):
+        with pytest.raises(ValueError, match="UPDATE_ROLLBACK_COMPLETE"):
+            wait_for_stack_stable_state("test-stack")
+    assert client.describe_stacks.call_count == 2
+    polling_clock.sleep.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize("timeout,interval", [(0, 10), (10, 0), (-1, 10)])
+def test_stack_polling_rejects_invalid_wait_limits(timeout, interval):
+    from deploy_with_lambda_call import wait_for_stack_stable_state
+
+    with patch("deploy_with_lambda_call.boto3.client") as factory:
+        with pytest.raises(ValueError, match="must be positive"):
+            wait_for_stack_stable_state(
+                "test-stack", timeout_seconds=timeout, poll_interval_seconds=interval
+            )
+    factory.assert_not_called()

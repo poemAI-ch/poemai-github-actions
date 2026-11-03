@@ -94,3 +94,9 @@ stack errors, before polling CloudFormation. An accepted response with
 its final state without invoking the deployer again. Polling uses bounded API
 calls and a monotonic deadline. Individual stacks can configure
 `stable_state_timeout_seconds` for long custom resource operations.
+
+If a CloudFormation status read is throttled after the SDK's own retries, polling
+continues with exponential backoff and jitter, capped at 30 seconds per delay.
+Retries share the existing monotonic wait deadline and never replay the deployment
+Lambda. Successful reads reset the backoff; permission errors and failed stack
+states still fail immediately.
