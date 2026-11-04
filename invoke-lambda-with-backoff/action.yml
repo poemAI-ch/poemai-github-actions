@@ -13,9 +13,25 @@ inputs:
     required: false
     default: "eu-central-1"
   payload:
-    description: "JSON payload as string or @file.json"
+    description: "JSON payload as string, @file.json, file://path or fileb://path"
     required: false
     default: "{}"
+  payload-file:
+    description: "Path to a JSON request file; cannot be combined with a non-default payload"
+    required: false
+    default: ""
+  read-timeout:
+    description: "AWS CLI socket read timeout in seconds"
+    required: false
+    default: "60"
+  connect-timeout:
+    description: "AWS CLI connection timeout in seconds"
+    required: false
+    default: "60"
+  log-response:
+    description: "Print response and error bodies; false suppresses bodies and returned logs"
+    required: false
+    default: "true"
   log-type:
     description: "Log type to request from Lambda (e.g., Tail)"
     required: false
@@ -49,106 +65,16 @@ runs:
     - name: Invoke Lambda function with backoff
       id: invoke
       shell: bash
-      run: |
-        echo "Invoking Lambda: ${{ inputs.function-name }}"
-        echo "Region: ${{ inputs.region }}"
-        echo "Payload: ${{ inputs.payload }}"
-        echo "Max attempts: ${{ inputs.max-attempts }}"
-        echo "Initial delay: ${{ inputs.initial-delay }}"
-        
-        MAX_ATTEMPTS=${{ inputs.max-attempts }}
-        INITIAL_DELAY=${{ inputs.initial-delay }}
-        
-        for attempt in $(seq 1 $MAX_ATTEMPTS); do
-          echo "🔄 Attempt $attempt/$MAX_ATTEMPTS"
-          
-          # Invoke the Lambda function and capture the exit code
-          if aws lambda invoke \
-            --function-name "${{ inputs.function-name }}" \
-            --payload '${{ inputs.payload }}' \
-            --log-type "${{ inputs.log-type }}" \
-            --region "${{ inputs.region }}" \
-            --cli-binary-format raw-in-base64-out \
-            response.json 2>error.log; then
-            
-            echo "✅ Lambda invocation successful"
-            
-            # Check if response file exists and show its contents
-            if [ -f response.json ]; then
-              echo "📄 Lambda response:"
-              cat response.json
-              echo ""
-              
-              # Set output variables
-              RESPONSE_CONTENT=$(cat response.json)
-              echo "response<<EOF" >> $GITHUB_OUTPUT
-              echo "$RESPONSE_CONTENT" >> $GITHUB_OUTPUT
-              echo "EOF" >> $GITHUB_OUTPUT
-              
-              # Check for Lambda function errors in the response
-              if jq -e '.errorMessage' response.json > /dev/null 2>&1; then
-                echo "❌ Lambda function returned an error:"
-                jq -r '.errorMessage' response.json
-                echo "Error Type: $(jq -r '.errorType // "Unknown"' response.json)"
-                if jq -e '.stackTrace' response.json > /dev/null 2>&1; then
-                  echo "Stack Trace:"
-                  jq -r '.stackTrace[]' response.json
-                fi
-                echo "success=false" >> $GITHUB_OUTPUT
-                exit 1
-              else
-                echo "✅ Lambda function executed successfully"
-                echo "success=true" >> $GITHUB_OUTPUT
-                # Show the actual response payload if it's JSON
-                if jq empty response.json 2>/dev/null; then
-                  echo "📋 Response payload:"
-                  jq '.' response.json
-                fi
-                exit 0  # Success, exit the script
-              fi
-            else
-              echo "⚠️  Warning: No response file generated"
-              echo "success=false" >> $GITHUB_OUTPUT
-              echo "response=" >> $GITHUB_OUTPUT
-              exit 1
-            fi
-            
-          else
-            EXIT_CODE=$?
-            echo "❌ AWS CLI invoke command failed with exit code $EXIT_CODE"
-            
-            # Check if this is a throttling error
-            if grep -q "ThrottlingException\|TooManyRequestsException\|Rate exceeded" error.log; then
-              echo "🚦 Throttling detected, will retry..."
-              if [ $attempt -lt $MAX_ATTEMPTS ]; then
-                # Exponential backoff with jitter
-                DELAY=$(echo "scale=2; $INITIAL_DELAY * (2 ^ ($attempt - 1)) + ($RANDOM % 100) / 100" | bc -l)
-                echo "⏳ Waiting ${DELAY} seconds before retry..."
-                sleep $DELAY
-                continue
-              else
-                echo "❌ Max retry attempts reached for throttling"
-                echo "success=false" >> $GITHUB_OUTPUT
-                echo "response=" >> $GITHUB_OUTPUT
-                exit 1
-              fi
-            else
-              echo "❌ Non-throttling error, not retrying:"
-              cat error.log
-              echo "This could indicate:"
-              echo "  - Invalid function name or ARN"
-              echo "  - Insufficient permissions"
-              echo "  - Network connectivity issues"
-              echo "  - Invalid payload format"
-              echo "success=false" >> $GITHUB_OUTPUT
-              echo "response=" >> $GITHUB_OUTPUT
-              exit 1
-            fi
-          fi
-        done
-        
-        # If we get here, all attempts failed
-        echo "❌ All retry attempts exhausted"
-        echo "success=false" >> $GITHUB_OUTPUT
-        echo "response=" >> $GITHUB_OUTPUT
-        exit 1
+      env:
+        FUNCTION_NAME: ${{ inputs.function-name }}
+        REGION: ${{ inputs.region }}
+        PAYLOAD: ${{ inputs.payload }}
+        PAYLOAD_FILE: ${{ inputs.payload-file }}
+        LOG_TYPE: ${{ inputs.log-type }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        INITIAL_DELAY: ${{ inputs.initial-delay }}
+        READ_TIMEOUT: ${{ inputs.read-timeout }}
+        CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
+        LOG_RESPONSE: ${{ inputs.log-response }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "$ACTION_PATH/invoke.sh"

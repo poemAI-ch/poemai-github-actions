@@ -1,0 +1,19 @@
+name: Validate Lambda invocation action
+on:
+  pull_request:
+    paths:
+      - 'invoke-lambda-with-backoff/**'
+      - '.github/workflows/validate-lambda-invocation.yaml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install pytest PyYAML
+      - run: bash -n invoke-lambda-with-backoff/invoke.sh
+      - run: python -m pytest invoke-lambda-with-backoff/tests -q
